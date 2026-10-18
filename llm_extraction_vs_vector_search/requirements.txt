@@ -1,0 +1,4 @@
+anthropic>=1.15
+numpy
+pydantic>=2
+pytest
