@@ -1,0 +1,53 @@
+# dsguard configuration.
+# Put company-wide policy in ~/.claude/dsguard.toml; override per project with ./dsguard.toml
+# or [tool.dsguard] in pyproject.toml. Later files win, keys merge. Defaults: dsguard/core.py.
+
+[llm_gateway]
+# "ban": provider SDKs (openai, anthropic, langchain_openai, ...) may not be imported at all;
+#        only your gateway client may be used.
+# "require_gateway_base_url": provider SDKs are allowed, but every client must be built with
+#        base_url pointing at an allowed gateway host (typical for OpenAI-compatible gateways).
+mode = "ban"
+allowed_hosts = ["llm-gateway.yourcompany.internal"]   # glob patterns, e.g. "*.llmgw.corp.net"
+# Where the gateway client itself lives, and anything else allowed to talk to providers.
+exempt_paths = ["src/llm_gateway/**"]
+# Extend rather than replace by copying the default list from dsguard/core.py first.
+# banned_imports = [...]
+# banned_hosts = [...]
+
+[secrets]
+scan_history = true        # with gitleaks installed, also scan git history
+allow_paths = []           # e.g. ["tests/fixtures/fake_creds/**"]
+
+[exposure]
+allowed_data_paths = ["**/fixtures/**", "**/testdata/**", "tests/data/**"]
+pii_email_allow_domains = ["example.com", "yourcompany.com"]
+
+[licenses]
+python = ""                # project interpreter; default: .venv/bin/python, venv/bin/python
+[licenses.exceptions]
+# "some-package" = "LGPL approved by legal 2026-03, ticket LEGAL-123"
+
+[sql]
+dialect = "bigquery"       # sqlfluff dialect: ansi, bigquery, snowflake, postgres, tsql, databricks, ...
+[sql.partitioned_tables]
+# Queries touching these tables must filter on the partition column.
+# "analytics.events" = "event_date"
+
+[code]
+max_function_lines = 60
+max_complexity = 10
+max_nesting = 4
+max_args = 7
+ruff = true
+
+[docs]
+min_public_coverage = 0.8
+
+[cleanup]
+large_file_mb = 10
+entrypoints = ["scripts/**", "dags/**"]   # never report these as unused modules
+keep = []                                 # never propose these for cleanup
+
+[hooks]
+ask_on_recursive_rm = true

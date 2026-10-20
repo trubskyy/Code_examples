@@ -1,0 +1,5 @@
+#!/bin/sh
+# Blocks commits that bypass the LLM gateway or contain secrets.
+# Install per repo:  ln -s ~/.claude/ds-toolkit/git-hooks/pre-commit .git/hooks/pre-commit
+# Note: scans the working-tree copy of staged files.
+exec "$HOME/.claude/ds-toolkit/bin/dsguard" run commit --staged --no-save
