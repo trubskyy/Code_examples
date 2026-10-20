@@ -28,7 +28,7 @@ Audit this whole repository (or only `$ARGUMENTS` if a path is given).
 ## Must fix
 ## Top refactors (from refactor-advisor, top 3)
 ## Cleanup plan (from cleanup-agent; awaiting approval at .dsguard/cleanup-plan.json)
-## Suggested next (model-diagnostics / llm-evaluator and what they need)
+## Suggested next (model-diagnostics / llm-evaluator / drift-monitor and what they need; offer stakeholder-writer for a non-technical summary of this audit)
 ## Not covered
 ```
 

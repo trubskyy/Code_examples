@@ -37,6 +37,8 @@ out of a finding. Agents read the script output first, then do what scripts can'
 | **Leakage (data)** | `harness/leakage_check.py`: shared ids/groups across splits, duplicate feature rows, normalized and word-set duplicate texts, temporal overlap, feature timestamps after event time, columns too predictive alone (raw and missingness), target copies, id/row-order leakage, PSI drift | Confirming each hit is a real leak, choosing the fix |
 | **Model diagnostics** | `harness/model_diagnostics.py` on any framework's predictions: AUC/AP/log-loss/Brier/ECE or RMSE/MAE/R²/bias, calibration and threshold tables, residual structure per feature (eta²), weakest segments, metric over time, single-feature strength, redundant pairs, permutation importance (optional model), worst rows, plots | Baselines, causes, which experiments to run next |
 | **LLM evals** | `harness/llm_eval.py`: golden-set runner calling *your* gateway function; exact/normalized/contains/regex/JSON/field/numeric checks, by-tag pass rates, error rate, consistency over repeats, p50/p95 latency, tokens and cost, judge-vs-human kappa, response cache, pass→fail diff vs baseline (exit 1) | Building the golden set, judge rubric, diagnosing regressions, significance |
+| **Drift monitoring** | `harness/drift_monitor.py`: per-feature PSI, KS, mean shift in SDs, out-of-reference-range share, unseen categories, missing-rate change; prediction drift; performance with label coverage; schema/type changes; per-period trends and volume (partial periods excluded); importance-weighted OK/WATCH/ALERT; run history; exit 1 on ALERT. `bin/ds-monitor` runs it on a schedule and wakes Claude only on ALERT, read-only. | Pipeline break vs population shift vs noise; retrain or fix upstream |
+| **Stakeholder summaries** | `harness/facts.py`: builds a numbered facts ledger from any report (and before/after deltas), then **`verify` fails any sentence whose numbers are not cited or do not match the cited fact** at the written precision (%, pp, k/M handled). `render` strips citations and adds sources. | What matters to the audience, plain-language framing, caveats |
 | **Cleanup** | Junk dirs and files, suspect names, empty/large/identical files, unimported modules. **Apply is a script**: moves files to `.dsguard/trash/<stamp>` (restorable) or `git rm --cached`; refuses paths outside the repo. The hook **asks** before any `rm -r`. | Verifying a module is really unused, choosing what goes into the plan |
 
 ## Agents (in `agents/`)
@@ -52,6 +54,8 @@ out of a finding. Agents read the script output first, then do what scripts can'
 | `leakage-auditor` | scratch only | Code + data leakage, eval contamination for LLM projects |
 | `model-diagnostics` | scratch only | Builds the eval table, runs the harness, ranks next experiments |
 | `llm-evaluator` | eval files | Golden sets, adapters, runs and regression diagnosis via the gateway |
+| `drift-monitor` | monitor config | Sets up `monitor.toml` for a deployed model; triages ALERTs |
+| `stakeholder-writer` | summaries | Exec/product/peer summaries where every number is script-verified |
 
 "Scratch only" agents write helper scripts and data extracts under `.dsguard/scratch/`, never
 into project code.
@@ -96,6 +100,16 @@ The scripts run without Claude too, e.g. in CI:
 ~/.claude/ds-toolkit/bin/dsguard verify-docs-only
 ```
 
+Scheduled drift monitoring per deployed model (after the `drift-monitor` agent writes `monitor.toml`):
+
+```bash
+# crontab -e
+0 7 * * 1  $HOME/.claude/ds-toolkit/bin/ds-monitor $HOME/work/churn-model
+```
+
+The monitor itself is deterministic; on ALERT the wrapper runs `claude -p` with Read/Grep/Glob
+only and saves a triage note next to the report.
+
 Reports land in `.dsguard/reports/` (git-ignored automatically).
 
 ## Tests
@@ -104,7 +118,7 @@ Reports land in `.dsguard/reports/` (git-ignored automatically).
 python -m pytest -q claude_ds_agents/tests
 ```
 
-## Harness scripts (need numpy + pandas; llm_eval is stdlib only)
+## Harness scripts (need numpy + pandas; llm_eval and facts are stdlib only)
 
 Run them with the **project's** interpreter so they can load its data and code:
 
@@ -115,17 +129,22 @@ Run them with the **project's** interpreter so they can load its data and code:
     --target y --id customer_id --time event_ts --text notes
 .venv/bin/python ~/.claude/ds-toolkit/harness/llm_eval.py run --cases evals/golden.jsonl \
     --target evals.eval_targets:extract --baseline .dsguard/evals/last.json
+.venv/bin/python ~/.claude/ds-toolkit/harness/drift_monitor.py --config monitor.toml
+python3 ~/.claude/ds-toolkit/harness/facts.py collect .dsguard/diagnostics/*/diagnostics.json --out .dsguard/summaries/facts.json
+python3 ~/.claude/ds-toolkit/harness/facts.py verify .dsguard/summaries/q3-review.md
 ```
 
 Each writes JSON (for agents and CI) and Markdown (for you) under `.dsguard/`. matplotlib,
 pyarrow and joblib are optional. Metrics are implemented in `harness/common.py`, so sklearn is
 not required.
 
-## Roadmap
+## Next steps (recorded, not built yet)
 
-| Agent | Deterministic part to build first |
-|---|---|
-| `stats-reviewer` | Power and sample-size calculator, multiple-comparison correction, SRM check for A/B tests |
-| `team-pr-reviewer` | dsguard on the PR diff plus your team standards file; the agent writes coaching feedback |
-| `monitoring` | Scheduled PSI/metric drift on production scoring tables, reusing `common.psi` and `model_diagnostics` |
-| `stakeholder-writer` | Pulls numbers only from diagnostics/eval JSON, so summaries cannot invent results |
+| Agent | Deterministic part to build first | Agent judgement |
+|---|---|---|
+| `stats-reviewer` (A/B tests) | Sample-ratio-mismatch chi-square test, power and minimum-detectable-effect calculator, multiple-comparison correction (Holm/BH), peeking check from the analysis timeline, CUPED variance-reduction helper, CIs for ratio metrics (delta method) | Whether the metric matches the decision, novelty effects, interference between units, practical vs statistical significance |
+| `team-pr-reviewer` | dsguard on the PR diff, the team standards file as a checklist with pass/fail per item, past review comments for the author to spot recurring themes | Coaching-style feedback that teaches; what to escalate to you |
+
+Smaller follow-ups: feed `drift_monitor` alerts into `stakeholder-writer` for a weekly model
+health note, and let `model-diagnostics` write its permutation importance to the path
+`monitor.toml` reads.

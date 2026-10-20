@@ -1,0 +1,26 @@
+#!/bin/sh
+# Scheduled drift check for one project. The deterministic monitor always runs; Claude is
+# only woken on ALERT, and only with read-only tools, to write a triage note.
+#
+#   ds-monitor <project-dir> [monitor.toml]
+#   cron:  0 7 * * 1  $HOME/.claude/ds-toolkit/bin/ds-monitor $HOME/work/churn-model
+#
+# Exit code: 0 OK/WATCH, 1 ALERT, 2 setup error.
+set -u
+project=${1:?usage: ds-monitor <project-dir> [monitor.toml]}
+config=${2:-monitor.toml}
+cd "$project" || exit 2
+[ -f "$config" ] || { echo "ds-monitor: $project/$config not found (ask the drift-monitor agent to set it up)"; exit 2; }
+
+python=.venv/bin/python
+[ -x "$python" ] || python=python3
+"$python" "$HOME/.claude/ds-toolkit/harness/drift_monitor.py" --config "$config"
+status=$?
+
+if [ "$status" -eq 1 ] && command -v claude >/dev/null 2>&1; then
+  note=".dsguard/drift/triage-$(date +%Y%m%d-%H%M).md"
+  claude -p "Use the drift-monitor agent in triage mode on the latest drift report (last line of .dsguard/drift/history.jsonl). Read only; return the report." \
+    --allowedTools "Read" "Grep" "Glob" > "$note" 2>&1
+  echo "triage note: $project/$note"
+fi
+exit "$status"
