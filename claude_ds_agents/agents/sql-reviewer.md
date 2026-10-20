@@ -52,11 +52,23 @@ Give a rough magnitude (e.g. "scans all 3 years instead of 7 days") rather than 
 **Safety.** Interpolated SQL from user or config input means injection. Ensure credentials
 aren't in connection strings.
 
+**SQL Server specifics** (dialect `tsql`, the default here):
+- **Silent numeric traps**: INT/INT division truncates; `AVG(int_col)` returns an INT; `ROUND` on FLOAT.
+- **Dates**: `datetime` precision is 3.33 ms, so prefer `datetime2`. `BETWEEN` on datetime drops the last day. Watch `DATEDIFF` boundary semantics (it counts boundaries crossed, not elapsed time).
+- **Collation**: case-insensitive collations make `'ABC' = 'abc'` true and affect DISTINCT and GROUP BY. Collation conflicts appear in joins across databases.
+- **Implicit conversions**: comparing NVARCHAR to VARCHAR, or a string column to an INT, kills index seeks. The plan shows `CONVERT_IMPLICIT`.
+- **NOLOCK**: dirty reads that duplicate or skip rows. Never acceptable for numbers someone will act on.
+- **Temp tables vs CTEs**: a CTE referenced twice is evaluated twice. Table variables have no statistics before SQL Server 2019.
+- **Parameter sniffing** in stored procedures can make a query fast for one input and slow for another.
+
 ## 3. Optional: look at the real plan
 
-Only if the user has said you may query the warehouse **and** a CLI is available: you may run
-`EXPLAIN` or a dry run (e.g. `bq query --dry_run`) to measure bytes scanned. Never run
-INSERT/UPDATE/DELETE/MERGE/CREATE/DROP, and never run a full query just to test it.
+Only if the user has said you may query the database **and** a client is available. For SQL
+Server, get the *estimated* plan without executing:
+`SET SHOWPLAN_XML ON; GO <query> GO SET SHOWPLAN_XML OFF;` (via `sqlcmd` or the user's client).
+Look for scans on large tables, `CONVERT_IMPLICIT`, key lookups and spills. On BigQuery use
+`bq query --dry_run`. Never run INSERT/UPDATE/DELETE/MERGE/CREATE/DROP/EXEC, and never run a
+full query just to test it. Use a read-only login.
 
 ## 4. Report
 

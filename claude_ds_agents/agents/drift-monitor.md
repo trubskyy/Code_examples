@@ -21,8 +21,10 @@ Every alert is one of:
    outcomes for a scored row become known?
 3. If data lives in a warehouse, write the extract as SQL files under `monitoring/` (reviewed by
    the user, read-only queries). Have the scheduler export to parquet or CSV before the monitor runs.
-4. Get feature importance if possible, either from a `model-diagnostics` run (its
-   `diagnostics.json`) or from the model, so alerts focus on features that matter.
+4. Get feature importance if possible so alerts focus on features that matter: use a
+   `model-diagnostics` run (its `diagnostics.json`, which the monitor reads directly). To find
+   and load the model, use `harness/model_loader.py scan` / `inspect`, with the same flags as
+   model-diagnostics.
 5. Write `monitor.toml` (after showing it to the user):
 
 ```toml

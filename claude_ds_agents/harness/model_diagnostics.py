@@ -7,7 +7,8 @@ optionally segment, time and id columns. Any model (sklearn, LightGBM, PyTorch,
 an LLM classifier) can be diagnosed once its predictions are in that table.
 
   python model_diagnostics.py --data eval.parquet --target churned --pred p_churn \
-      --segments region plan --time scored_at --id customer_id [--model model.joblib]
+      --segments region plan --time scored_at --id customer_id \
+      [--model models/churn.txt | --model model.pkl --trust-pickle | --factory pkg.train:build]
 
 Writes diagnostics.json, diagnostics.md and (with matplotlib) PNG plots to
 .dsguard/diagnostics/<timestamp>/. The model-diagnostics agent interprets them.
@@ -24,6 +25,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from model_loader import add_load_args, load_from_args  # noqa: E402
 from common import (  # noqa: E402
     TIME_UNITS, binary_metrics, calibration_table, is_binary_target, load_table, md_table, out_dir,
     regression_metrics, score, single_feature_strength, time_frequency, write_report,
@@ -137,9 +139,7 @@ def permutation_importance(model, frame: pd.DataFrame, features: list[str], task
     rng = np.random.default_rng(seed)
 
     def predict(data):
-        if task == "binary" and hasattr(model, "predict_proba"):
-            return np.asarray(model.predict_proba(data))[:, 1]
-        return np.asarray(model.predict(data), dtype=float)
+        return model.predict(data)
 
     base_x = frame[features]
     baseline = score(task, frame[target], predict(base_x))
@@ -246,7 +246,8 @@ def main(argv=None) -> int:
     ap.add_argument("--time")
     ap.add_argument("--id")
     ap.add_argument("--exclude", nargs="*", default=[])
-    ap.add_argument("--model", help="optional pickled/joblib model with predict[_proba] for permutation importance")
+    ap.add_argument("--model", help="model file for permutation importance (see model_loader.py scan)")
+    add_load_args(ap)
     ap.add_argument("--sample", type=int, default=200_000, help="row cap for speed")
     ap.add_argument("--out")
     args = ap.parse_args(argv)
@@ -287,17 +288,17 @@ def main(argv=None) -> int:
 
     importance = pd.DataFrame()
     notes = []
-    if args.model:
-        try:
-            import joblib
-            model = joblib.load(args.model)
-        except ImportError:
-            import pickle
-            with open(args.model, "rb") as fh:
-                model = pickle.load(fh)
-        importance = permutation_importance(model, frame, features, task, args.target)
+    if args.model or args.factory:
+        model = load_from_args(args, args.model, features)
+        missing = [f for f in (model.feature_names or []) if f not in frame.columns]
+        if missing:
+            notes.append(f"model expects columns missing from the eval table: {missing[:10]}; importance skipped")
+        else:
+            model_features = model.feature_names or features
+            importance = permutation_importance(model, frame, model_features, task, args.target)
+            notes.append(f"importance from {model.framework} {model.kind} model on {len(model_features)} features")
     else:
-        notes.append("no --model given: permutation importance skipped")
+        notes.append("no --model/--factory given: permutation importance skipped")
 
     directory = out_dir(args.out, "diagnostics")
     images = plots(directory, task, y, pred, resid, calib)

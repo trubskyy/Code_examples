@@ -24,7 +24,37 @@ print(json.dumps(out))
 """
 HF_LOADERS = {"from_pretrained", "pipeline", "load_dataset", "SentenceTransformer", "CrossEncoder",
               "snapshot_download", "hf_hub_download"}
-RANK = {"allow": 0, "review": 1, "unknown": 2, "deny": 3}
+# Families from least to most restrictive. Bucket "always-free" means use, modify and ship
+# freely with attribution; everything else is "potential-issues" with the obligation spelled out.
+# Patterns are tried most-restrictive first so "LGPL" is not read as "GPL" and so on.
+FAMILIES = [
+    # (family, bucket, rank, patterns, what it means)
+    ("permissive", "always-free", 0,
+     [r"\bMIT", r"\bBSD", r"Apache", r"\bISC", r"\bPSF", r"Python Software Foundation", r"Unlicense", r"\bZlib",
+      r"\bCC0", r"\bHPND", r"Public Domain", r"\b0BSD", r"BSL-1\.0", r"Boost Software", r"\bUPL",
+      r"Historical Permission", r"\bWTFPL", r"\bCC-BY(?!-)", r"\bCC-BY-4"],
+     "free to use, modify and ship; keep the copyright/license notice"),
+    ("weak-copyleft", "potential-issues", 1,
+     [r"\bLGPL", r"Lesser General Public", r"Library General Public", r"\bMPL", r"Mozilla", r"\bEPL", r"Eclipse",
+      r"\bCDDL", r"\bOSL", r"Artistic"],
+     "fine to use unmodified as a library; if you modify the library itself and distribute it, "
+     "those changes must be released under the same license"),
+    ("unknown", "potential-issues", 2, [],
+     "no recognizable license metadata; check the project's LICENSE file before relying on it"),
+    ("strong-copyleft", "potential-issues", 3,
+     [r"\bGPL", r"(?<!Lesser )(?<!Library )General Public License", r"CC-BY-SA"],
+     "internal use is usually fine; if you distribute software containing it (installers, shipped "
+     "containers, client code) the whole program may have to be released under the GPL"),
+    ("network-copyleft", "potential-issues", 4,
+     [r"\bAGPL", r"Affero"],
+     "like GPL, and serving it over a network (an API, a web app) counts as distribution"),
+    ("restricted", "potential-issues", 5,
+     [r"\bSSPL", r"Server Side Public", r"Commons Clause", r"\bBUSL", r"Business Source", r"CC-BY-NC",
+      r"NonCommercial", r"Non-Commercial", r"Elastic License", r"Research", r"Proprietary"],
+     "not open source: limits commercial use or offering it as a service; needs legal review"),
+]
+FAMILY = {f[0]: f for f in FAMILIES}
+MATCH_ORDER = sorted((f for f in FAMILIES if f[3]), key=lambda f: -f[2])
 
 
 def normalize(name: str) -> str:
@@ -53,24 +83,20 @@ def license_options(dist: dict) -> list[str]:
     return [text[:200]] if text else []
 
 
-def classify_one(text: str, cfg: dict) -> str:
-    if any(re.search(p, text) for p in cfg["deny"]):
-        return "deny"
-    if any(re.search(p, text) for p in cfg["review"]):
-        return "review"
-    if any(re.search(p, text) for p in cfg["allow"]):
-        return "allow"
+def classify_one(text: str) -> str:
+    for family, _, _, patterns, _ in MATCH_ORDER:
+        if any(re.search(p, text) for p in patterns):
+            return family
     return "unknown"
 
 
-def classify(dist: dict, cfg: dict) -> tuple[str, str]:
-    """Best category across dual-licence options, and a short label."""
+def classify(dist: dict) -> tuple[str, str]:
+    """License family (least restrictive across dual-license options) and a short label."""
     options = license_options(dist)
     if not options:
         return "unknown", "no license metadata"
-    best = min(options, key=lambda o: RANK[classify_one(o, cfg)])
-    label = " OR ".join(o[:60] for o in options)
-    return classify_one(best, cfg), label
+    best = min(options, key=lambda o: FAMILY[classify_one(o)][2])
+    return classify_one(best), " OR ".join(o[:60] for o in options)
 
 
 def direct_dependencies(root: Path) -> set[str]:
@@ -135,20 +161,30 @@ def run(ctx: Context) -> CheckResult:
         return result
     direct = direct_dependencies(ctx.root)
     exceptions = {normalize(k): v for k, v in cfg["exceptions"].items()}
-    seen = set()
+    block = set(cfg["block_families"])
+    seen, counts = set(), {"always-free": 0, "potential-issues": 0}
     for dist in sorted(dists, key=lambda d: normalize(d["name"] or "")):
         name = normalize(dist["name"] or "?")
-        if name in exceptions or (name, dist["version"]) in seen:
+        if (name, dist["version"]) in seen:
             continue
         seen.add((name, dist["version"]))
-        category, label = classify(dist, cfg)
+        family, label = classify(dist)
+        _, bucket, rank, _, meaning = FAMILY[family]
+        if name in exceptions:
+            bucket = "always-free"
+        counts[bucket] += 1
+        if bucket == "always-free":
+            continue
         is_direct = name in direct
-        where = "direct" if is_direct else "transitive"
-        package = f"{dist['name']}=={dist['version']}"
-        if category == "deny":
-            result.add("license-denied", "block", package, f"{where} dependency licensed {label}")
-        elif category in ("review", "unknown"):
-            result.add(f"license-{category}", "warn" if is_direct else "info", package,
-                       f"{where} dependency licensed {label}; confirm it is acceptable")
+        if family in block:
+            severity = "block"
+        elif rank >= 3 or (is_direct and rank == 2):
+            severity = "warn"
+        else:
+            severity = "info"
+        result.add(f"license-{family}", severity, f"{dist['name']}=={dist['version']}",
+                   f"{'direct' if is_direct else 'transitive'} dependency, {label}: {meaning}")
+    result.notes.append(f"{counts['always-free']} packages always free, {counts['potential-issues']} with potential issues"
+                        + ("" if block else "; nothing blocks until licenses.block_families is set"))
     _hf_ids(ctx, result)
     return result

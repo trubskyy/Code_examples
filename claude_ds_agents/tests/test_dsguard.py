@@ -2,6 +2,7 @@
 
 import copy
 import json
+import tomllib
 import subprocess
 import sys
 from pathlib import Path
@@ -11,7 +12,7 @@ import pytest
 TOOLKIT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(TOOLKIT))
 
-from dsguard import cleanup, code, docs, exposure, gateway, licenses, secrets, sql  # noqa: E402
+from dsguard import cleanup, code, docs, exposure, gateway, licenses, onboard, secrets, sql  # noqa: E402
 from dsguard.core import DEFAULTS, build_context, parse  # noqa: E402
 
 GW = DEFAULTS["llm_gateway"]
@@ -125,6 +126,28 @@ def test_sql_line_numbers_and_partition_filter():
     assert "missing-partition-filter" in rules(hits)
 
 
+def test_tsql_rules():
+    query = """
+    SELECT TOP 100 c.id, AVG(o.amount), SUM(o.refunds) / COUNT(*) AS rate
+    FROM [dbo].[customers] c WITH (NOLOCK)
+    LEFT JOIN [dbo].[orders] o ON o.customer_id = c.id
+    WHERE o.status = 'open' AND CONVERT(date, c.created_at) = '2024-01-01' AND dbo.fnIsActive(c.id) = 1
+    GROUP BY c.id
+    GO
+    DECLARE cur CURSOR FOR SELECT id FROM t
+    """
+    found = set(rules(sql.lint_sql(query, SQL)))
+    assert {"nolock", "integer-division", "avg-int", "limit-without-order", "left-join-filtered",
+            "function-on-filter-column", "scalar-udf-filter", "cursor"} <= found
+    ansi = set(rules(sql.lint_sql(query, SQL | {"dialect": "ansi"})))
+    assert "nolock" not in ansi and "avg-int" not in ansi
+
+
+def test_go_separates_batches():
+    hits = sql.lint_sql("SELECT a FROM t\nGO\nSELECT * FROM u\n", SQL)
+    assert [(h[0], h[2]) for h in hits] == [("select-star", 2)]
+
+
 def test_python_sql_extraction_flags_interpolation():
     tree = parse('q = f"SELECT * FROM {table} WHERE id = {i}"\nr = "SELECT id FROM t"\n')
     found = list(sql.python_sql(tree))
@@ -203,15 +226,18 @@ def test_notebook_outputs_flagged(tmp_path):
 
 
 @pytest.mark.parametrize("dist,expected", [
-    ({"classifiers": ["License :: OSI Approved :: GNU General Public License v3 (GPLv3)"]}, "deny"),
-    ({"classifiers": ["License :: OSI Approved :: GNU Lesser General Public License v3 (LGPLv3)"]}, "review"),
-    ({"expression": "MIT OR GPL-3.0-only"}, "allow"),
-    ({"license": "BSD-3-Clause"}, "allow"),
-    ({"license": "Proprietary"}, "unknown"),
+    ({"classifiers": ["License :: OSI Approved :: GNU General Public License v3 (GPLv3)"]}, "strong-copyleft"),
+    ({"classifiers": ["License :: OSI Approved :: GNU Lesser General Public License v3 (LGPLv3)"]}, "weak-copyleft"),
+    ({"classifiers": ["License :: OSI Approved :: GNU Affero General Public License v3"]}, "network-copyleft"),
+    ({"expression": "MIT OR GPL-3.0-only"}, "permissive"),
+    ({"license": "BSD-3-Clause"}, "permissive"),
+    ({"license": "CC-BY-NC-4.0"}, "restricted"),
+    ({"license": "Mozilla Public License 2.0 (MPL 2.0)"}, "weak-copyleft"),
+    ({"license": "Some custom terms"}, "unknown"),
     ({}, "unknown"),
 ])
 def test_license_classification(dist, expected):
-    assert licenses.classify(dist, DEFAULTS["licenses"])[0] == expected
+    assert licenses.classify(dist)[0] == expected
 
 
 # --- cleanup -------------------------------------------------------------------
@@ -251,3 +277,28 @@ def test_apply_refuses_paths_outside_root(tmp_path):
     plan.write_text(json.dumps({"items": [{"path": "../etc", "action": "delete"}]}))
     with pytest.raises(SystemExit):
         cleanup.apply_plan(root, plan)
+
+
+# --- gateway adoption -------------------------------------------------------------
+
+def test_suggest_gateway_for_package(tmp_path):
+    pkg = tmp_path / "corp_llm"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("from .client import complete\n")
+    (pkg / "client.py").write_text(
+        "import os\nfrom openai import OpenAI\n"
+        "_client = OpenAI(base_url='https://llm-gw.corp.internal/v1', api_key=os.environ['OPENAI_API_KEY'])\n"
+        "def complete(prompt):\n    return _client.chat.completions.create(model='x', messages=[])\n")
+    text = onboard.suggest(pkg, tmp_path)
+    cfg = tomllib.loads(text)["llm_gateway"]
+    assert cfg["mode"] == "ban" and cfg["allowed_hosts"] == ["llm-gw.corp.internal"]
+    assert cfg["exempt_paths"] == ["corp_llm/**"]
+    assert "OPENAI_API_KEY" not in cfg["provider_key_env_vars"]
+    assert "`corp_llm`" in text
+
+
+def test_suggest_gateway_for_snippet(tmp_path):
+    snippet = tmp_path / "gateway_snippet.py"
+    snippet.write_text("from openai import AzureOpenAI\nc = AzureOpenAI(azure_endpoint=os.getenv('GW_URL'))\n")
+    cfg = tomllib.loads(onboard.suggest(snippet, tmp_path))["llm_gateway"]
+    assert cfg["mode"] == "require_gateway_base_url" and cfg["allowed_hosts"] == []

@@ -18,13 +18,15 @@ from .core import CheckResult, Context, call_name, cell_text, notebook_cells, py
 SQL_START = re.compile(r"^\s*(?:--[^\n]*\n\s*)*(select|with|insert|update|delete|merge|create|replace)\b", re.I)
 SQL_BODY = re.compile(r"\b(from|into|table)\b", re.I)
 KEYWORDS = {"on", "using", "where", "left", "right", "inner", "outer", "full", "join", "cross", "group",
-            "order", "limit", "union", "qualify", "window", "having", "lateral"}
+            "order", "limit", "union", "qualify", "window", "having", "lateral", "with", "apply", "option"}
 SARGABLE = re.compile(
     r"\b(date|lower|upper|cast|trim|substr|substring|year|month|to_char|to_date|date_trunc|"
-    r"coalesce|extract|format_date|timestamp_trunc)\s*\([^()]*\)\s*(=|<|>|<=|>=|!=|<>|between\b|in\b|like\b)",
+    r"coalesce|extract|format_date|timestamp_trunc|convert|try_convert|try_cast|isnull|datepart|datediff|"
+    r"dateadd|eomonth|format|left|right|ltrim|rtrim)\s*\([^()]*\)\s*(=|<|>|<=|>=|!=|<>|between\b|in\b|like\b)",
     re.I,
 )
-CLAUSE_END = re.compile(r"\b(group\s+by|order\s+by|having|limit|qualify|union|window)\b", re.I)
+CLAUSE_END = re.compile(r"\b(group\s+by|order\s+by|having|limit|qualify|union|window|option)\b", re.I)
+GO_BATCH = re.compile(r"^[ \t]*go[ \t]*(\d+)?[ \t]*$", re.I | re.M)
 
 
 def looks_like_sql(text: str) -> bool:
@@ -66,8 +68,9 @@ def mask(sql: str) -> tuple[str, str]:
 
 
 def statements(clean: str) -> list[tuple[int, int]]:
+    """Statement spans split on ';' and on T-SQL 'GO' batch separator lines."""
     spans, start = [], 0
-    for m in re.finditer(";", clean):
+    for m in sorted([*re.finditer(";", clean), *GO_BATCH.finditer(clean)], key=lambda m: m.start()):
         spans.append((start, m.start()))
         start = m.end()
     spans.append((start, len(clean)))
@@ -124,7 +127,7 @@ def lint_statement(stmt: str, raw: str, cfg: dict) -> list[tuple[str, str, int, 
         hit("leading-wildcard", "info", m.start(), "LIKE '%…' cannot use an index or clustering")
     for m in re.finditer(r"\bbetween\s+'\d{4}-\d{2}-\d{2}'\s+and\s+'\d{4}-\d{2}-\d{2}'", raw, re.I):
         hit("date-between", "info", m.start(),
-            "BETWEEN dates on a TIMESTAMP column drops the end day after 00:00; use >= start AND < end + 1 day")
+            "BETWEEN dates on a date-time column drops the end day after 00:00; use >= start AND < end + 1 day")
 
     wheres = list(_where_clauses(stmt))
     for offset, clause in wheres:
@@ -132,9 +135,9 @@ def lint_statement(stmt: str, raw: str, cfg: dict) -> list[tuple[str, str, int, 
             hit("function-on-filter-column", "info", offset + m.start(),
                 "function on a filtered column blocks index use and partition pruning")
 
-    for m in re.finditer(r"\bleft\s+(?:outer\s+)?join\s+([\w.\"`]+)(?:\s+(?:as\s+)?(\w+))?", stmt, re.I):
+    for m in re.finditer(r"\bleft\s+(?:outer\s+)?join\s+([\w.\"`\[\]]+)(?:\s+(?:as\s+)?(\w+))?", stmt, re.I):
         alias = m.group(2) if m.group(2) and m.group(2).lower() not in KEYWORDS else m.group(1).split(".")[-1]
-        alias = alias.strip('"`')
+        alias = alias.strip('"`[]')
         pattern = re.compile(rf"\b{re.escape(alias)}\.\w+\s*(=|<>|!=|<=|>=|<|>|\bin\b|\blike\b|\bbetween\b)", re.I)
         for offset, clause in wheres:
             if offset > m.end():
@@ -158,17 +161,43 @@ def lint_statement(stmt: str, raw: str, cfg: dict) -> list[tuple[str, str, int, 
     top = re.sub(r"\([^()]*\)", lambda m: " " * len(m.group(0)), stmt)
     for _ in range(5):
         top = re.sub(r"\([^()]*\)", lambda m: " " * len(m.group(0)), top)
-    limit = re.search(r"\blimit\b", top, re.I)
+    limit = re.search(r"\blimit\b|\bselect\s+(?:distinct\s+)?(top)\b", top, re.I)
     if limit and re.match(r"\s*(select|with)\b", stmt, re.I) and not re.search(r"\border\s+by\b", top, re.I):
+        word = "TOP" if limit.group(1) else "LIMIT"
         hit("limit-without-order", "info", limit.start(),
-            "LIMIT without ORDER BY returns arbitrary rows; never use it as a sample")
+            f"{word} without ORDER BY returns arbitrary rows; never use it as a sample")
+
+    if cfg["dialect"] == "tsql":
+        hits.extend(_tsql_rules(stmt, wheres))
 
     for table, column in cfg["partitioned_tables"].items():
         if re.search(rf"\b{re.escape(table)}\b", stmt, re.I):
             filtered = any(re.search(rf"\b{re.escape(column)}\b", c, re.I) for _, c in wheres)
             if not filtered:
                 hit("missing-partition-filter", "warn", 0,
-                    f"reads partitioned table {table} without filtering on {column}: full scan")
+                    f"reads large/partitioned table {table} without filtering on {column}: full scan")
+    return hits
+
+
+def _tsql_rules(stmt: str, wheres: list[tuple[int, str]]) -> list[tuple[str, str, int, str]]:
+    """SQL Server specifics, including the silent-number traps data scientists hit most."""
+    hits = []
+    for m in re.finditer(r"\bwith\s*\(\s*(nolock|readuncommitted)\b|\bisolation\s+level\s+read\s+uncommitted\b", stmt, re.I):
+        hits.append(("nolock", "warn", m.start(),
+                     "NOLOCK/READ UNCOMMITTED can return rows twice or skip them during page splits; "
+                     "use snapshot isolation (RCSI) for consistent reads"))
+    for m in re.finditer(r"\bdeclare\s+@?\w+\s+cursor\b|\bcursor\s+(?:local\s+|fast_forward\s+|static\s+)*for\b", stmt, re.I):
+        hits.append(("cursor", "warn", m.start(), "cursor processes rows one at a time; rewrite as a set-based query"))
+    for m in re.finditer(r"\b(?:sum|count)\s*\([^()]*\)\s*/\s*(?:count|sum)\s*\(|/\s*count\s*\(", stmt, re.I):
+        hits.append(("integer-division", "info", m.start(),
+                     "INT / INT truncates in SQL Server (3/4 = 0); multiply by 1.0 or CAST to DECIMAL first"))
+    for m in re.finditer(r"\bavg\s*\(\s*(?!cast\b|convert\b|1\.0)", stmt, re.I):
+        hits.append(("avg-int", "info", m.start(),
+                     "AVG of an INT column returns an INT in SQL Server; AVG(CAST(col AS DECIMAL(18,4)))"))
+    for offset, clause in wheres:
+        for m in re.finditer(r"\b(?:dbo|\w+)\.(?:fn|udf|f_)\w*\s*\(|\bdbo\.\w+\s*\(", clause, re.I):
+            hits.append(("scalar-udf-filter", "info", offset + m.start(),
+                         "scalar function in WHERE runs per row and can prevent parallelism and index seeks"))
     return hits
 
 

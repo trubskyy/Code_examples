@@ -8,7 +8,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from . import cleanup, code, docs, exposure, gateway, leakage, licenses, pysec, secrets, sql, vulns
+from . import cleanup, code, docs, exposure, gateway, leakage, licenses, onboard, pysec, secrets, sql, vulns
 from .core import SEVERITY_ORDER, CheckResult, build_context, ensure_state_dir, find_root
 
 CHECKS = {
@@ -119,6 +119,11 @@ def main(argv: list[str] | None = None) -> int:
     verify.add_argument("--ref", default="HEAD")
     verify.add_argument("--root", default=".")
     verify.set_defaults(func=cmd_verify_docs)
+
+    gw = sub.add_parser("suggest-gateway", help="draft [llm_gateway] config from existing gateway client code")
+    gw.add_argument("path", help="gateway package directory or .py file")
+    gw.add_argument("--root", default=".")
+    gw.set_defaults(func=lambda a: print(onboard.suggest(Path(a.path), find_root(Path(a.root)))) or 0)
 
     apply = sub.add_parser("apply-cleanup", help="execute an approved cleanup plan (reversible)")
     apply.add_argument("plan")

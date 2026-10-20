@@ -27,9 +27,9 @@ out of a finding. Agents read the script output first, then do what scripts can'
 | **Secrets** | Token patterns (AWS, Anthropic, OpenAI, GitHub, Slack, GCP, HF, JWT, URL passwords), entropy-checked assignments, credential files, gitleaks over git history. **Hook denies** writing them. Output is always redacted. | Fallback defaults, secrets printed in notebooks, keys on the CLI |
 | **Data exposure** | Committed data/model files, notebooks with saved outputs, PII regex (email, SSN, Luhn-valid cards) in outputs and data files, `0.0.0.0` binds, `share=True`, `debug=True`, CORS `*` | Whether outputs are sensitive, prompt/response logging, injection surface |
 | **Code security** | `pickle`/`torch.load`/`yaml.load`, `eval`, `shell=True`, `verify=False`, `trust_remote_code=True`; bandit if installed | Exploitability in context |
-| **Licenses** | Package licenses from installed metadata, classified allow/review/deny (dual licenses handled); HF model and dataset IDs extracted | Model/dataset card terms (non-commercial, acceptable-use) |
+| **Licenses** | Every installed package sorted into **always free** (MIT, BSD, Apache, ISC, PSF, …) or **potential issues**, with the obligation in plain English per family (weak copyleft, unknown, strong copyleft, network copyleft, restricted/non-commercial); dual licenses take the freer option; nothing blocks until you set `block_families`; HF model and dataset IDs extracted | Model/dataset card terms (non-commercial, acceptable-use) |
 | **Vulnerabilities** | pip-audit (reports **skipped**, never "pass", if missing) | none |
-| **SQL** | Comment- and string-aware rules: `SELECT *`, `NOT IN (SELECT)`, `= NULL`, a WHERE filter that turns a LEFT JOIN into an INNER JOIN, non-sargable filters, ORDER BY in subqueries, LIMIT without ORDER BY, `BETWEEN` dates on timestamps, missing partition filters, interpolated SQL; sqlfluff if installed | Grain, fan-out, NULL semantics, time zones, point-in-time leakage, incremental logic, cost |
+| **SQL** (SQL Server by default) | Comment- and string-aware rules: `SELECT *`, `NOT IN (SELECT)`, `= NULL`, a WHERE filter that turns a LEFT JOIN into an INNER JOIN, non-sargable filters (incl. `CONVERT`, `ISNULL`, `DATEPART`), ORDER BY in subqueries, TOP/LIMIT without ORDER BY, `BETWEEN` dates on date-times, missing filters on large/partitioned tables, interpolated SQL. T-SQL: `GO` batches, `NOLOCK`, cursors, INT/INT division, `AVG(int)`, scalar UDFs in WHERE. sqlfluff if installed. | Grain, fan-out, NULL semantics, collation, implicit conversions, point-in-time leakage, plans, cost |
 | **Code quality** | ruff, complexity, nesting, length, args, duplicate functions (rename-insensitive), `iterrows`, concat in a loop, chained assignment, `merge` without `validate=`, unseeded splits, swallowed exceptions | Silent pandas errors, leakage, reproducibility, LLM call robustness, performance |
 | **Refactoring** | Same metrics and duplicate fingerprints as evidence | What to extract, in what order, at what risk |
 | **Docs** | Docstring coverage, **stale docstring params**, missing README, notebooks without narrative. **`verify-docs-only` proves an edit changed only docstrings and comments** (AST diff). | Writing the docs |
@@ -60,15 +60,29 @@ out of a finding. Agents read the script output first, then do what scripts can'
 "Scratch only" agents write helper scripts and data extracts under `.dsguard/scratch/`, never
 into project code.
 
-Commands: `/ds-premerge [base]` (gate on the diff) and `/ds-audit [path]` (whole project).
+Commands: `/ds-setup` (one-time adoption on a new machine), `/ds-premerge [base]` (gate on the diff) and `/ds-audit [path]` (whole project).
 Call any agent directly too: "use the sql-reviewer on queries/".
+
+## Adopting it on the work machine
+
+1. Clone this repo there and run `python3 claude_ds_agents/install.py`.
+2. In Claude Code, run `/ds-setup [path to the gateway client]`. It:
+   - reads the **prewritten gateway client** with `dsguard suggest-gateway` and drafts the
+     `[llm_gateway]` section (mode, gateway host, exempt path, the key env var the gateway owns);
+   - validates it on a real project, including a dry run of the edit hook;
+   - lists SQL Server **partitioned/large tables** with read-only `sys.*` queries (you approve)
+     for `[sql.partitioned_tables]`;
+   - shows the license split for a project and records exceptions legal has approved;
+   - scans for model binaries;
+   - links the pre-commit gate into the repos you name.
+3. Until then the gateway rules use generic defaults. Nothing about your company is hardcoded.
 
 ## Install
 
 ```bash
 python3 claude_ds_agents/install.py --dry-run   # review first
 python3 claude_ds_agents/install.py             # symlinks + hook in ~/.claude/settings.json (backed up)
-cp claude_ds_agents/dsguard.example.toml ~/.claude/dsguard.toml   # then set your gateway
+# install.py also copies dsguard.example.toml to ~/.claude/dsguard.toml (your policy file)
 pip install pip-audit bandit sqlfluff           # optional, recommended
 brew install gitleaks                           # optional, recommended: scans git history
 ```
@@ -130,9 +144,19 @@ Run them with the **project's** interpreter so they can load its data and code:
 .venv/bin/python ~/.claude/ds-toolkit/harness/llm_eval.py run --cases evals/golden.jsonl \
     --target evals.eval_targets:extract --baseline .dsguard/evals/last.json
 .venv/bin/python ~/.claude/ds-toolkit/harness/drift_monitor.py --config monitor.toml
+.venv/bin/python ~/.claude/ds-toolkit/harness/model_loader.py scan .          # find models, never executes them
+.venv/bin/python ~/.claude/ds-toolkit/harness/model_loader.py inspect models/churn.txt
 python3 ~/.claude/ds-toolkit/harness/facts.py collect .dsguard/diagnostics/*/diagnostics.json --out .dsguard/summaries/facts.json
 python3 ~/.claude/ds-toolkit/harness/facts.py verify .dsguard/summaries/q3-review.md
 ```
+
+`model_loader.py` puts sklearn, LightGBM, XGBoost and PyTorch behind one `predict()`:
+- **LightGBM text and XGBoost json/ubj** load directly.
+- **Pickles** (joblib/pkl, and whole pickled torch modules) need `--trust-pickle`, because unpickling runs code.
+- **Torch state_dicts** need `--model-class module:Class`.
+- **Models defined in code** load through `--factory module:function`.
+
+`model_diagnostics.py` and the agents use the same flags.
 
 Each writes JSON (for agents and CI) and Markdown (for you) under `.dsguard/`. matplotlib,
 pyarrow and joblib are optional. Metrics are implemented in `harness/common.py`, so sklearn is

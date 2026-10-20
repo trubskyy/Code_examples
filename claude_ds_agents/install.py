@@ -92,8 +92,15 @@ def main() -> int:
 
     update_settings(install=not args.uninstall, dry_run=args.dry_run)
     if not args.uninstall:
-        print("\nNext: copy dsguard.example.toml to ~/.claude/dsguard.toml and set your gateway hosts.")
-        print("Optional tools: pip install pip-audit bandit sqlfluff; brew install gitleaks")
+        config = CLAUDE / "dsguard.toml"
+        if config.exists():
+            print(f"ok     {config} (kept; compare with dsguard.example.toml for new options)")
+        else:
+            print(f"copy   {config} <- dsguard.example.toml (your editable policy file)")
+            if not args.dry_run:
+                shutil.copy2(HERE / "dsguard.example.toml", config)
+        print("\nNext: start Claude Code and run /ds-setup to adopt the gateway and SQL Server settings.")
+        print("Optional tools: pip install pip-audit bandit sqlfluff; install gitleaks")
     return 0
 
 

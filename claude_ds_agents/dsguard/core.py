@@ -84,24 +84,13 @@ DEFAULTS: dict = {
     },
     "licenses": {
         "python": "",
-        "deny": [
-            r"\bAGPL", r"Affero", r"\bGPL", r"(?<!Lesser )(?<!Library )General Public License",
-            r"\bSSPL", r"Server Side Public", r"Commons Clause", r"\bBUSL", r"Business Source",
-            r"CC-BY-NC", r"NonCommercial", r"Elastic License",
-        ],
-        "review": [
-            r"\bLGPL", r"Lesser General Public", r"\bMPL", r"Mozilla", r"\bEPL", r"Eclipse",
-            r"\bCDDL", r"CC-BY-SA", r"\bOSL", r"Artistic",
-        ],
-        "allow": [
-            r"\bMIT", r"\bBSD", r"Apache", r"\bISC", r"\bPSF", r"Python Software Foundation",
-            r"Unlicense", r"\bZlib", r"\bCC0", r"\bHPND", r"Public Domain", r"\b0BSD",
-            r"BSL-1\.0", r"Boost Software", r"\bUPL", r"Historical Permission",
-        ],
+        # Families that fail the check: permissive, weak-copyleft, unknown, strong-copyleft,
+        # network-copyleft, restricted. Empty until there is a company policy.
+        "block_families": [],
         "exceptions": {},
     },
     "sql": {
-        "dialect": "ansi",
+        "dialect": "tsql",
         "partitioned_tables": {},
         "sqlfluff_exclude_prefixes": ["LT", "CP"],
     },

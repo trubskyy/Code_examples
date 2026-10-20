@@ -21,7 +21,23 @@ Read the training code or notebook. Pin down:
 If something essential is ambiguous (e.g. which split is the real holdout), ask the caller
 instead of guessing.
 
-## 2. Build the evaluation table
+## 2. Find and load the model
+
+```bash
+<project-python> ~/.claude/ds-toolkit/harness/model_loader.py scan .
+```
+
+This lists model files by framework without executing them. Models here are either **defined
+in code** or **stored as binaries**:
+- **LightGBM text, XGBoost json/ubj**: load directly.
+- **sklearn/joblib pickles, or a torch file holding a whole pickled module**: need `--trust-pickle`. Only use it for artifacts this project produced; say so in the report.
+- **Torch state_dict / Lightning checkpoint**: need `--model-class module:Class` and `--model-init '{...}'` from the project code, plus `--output logits|proba|value` describing the network's output.
+- **Defined in code**: point `--factory module:function` at (or write in `.dsguard/scratch/`) a function that builds or loads the fitted model with the project's own code.
+
+`model_loader.py inspect <path> [flags]` confirms the framework, task and the feature names the
+model expects. The eval table must contain those columns.
+
+## 3. Build the evaluation table
 
 The harness needs one row per **held-out** example with:
 - target;
@@ -31,7 +47,8 @@ The harness needs one row per **held-out** example with:
 
 - If the project already writes predictions, use them.
 - Otherwise write a small script at `.dsguard/scratch/make_eval_table.py` that loads the
-  project's own model and holdout data with the project's code and writes
+  model (`from model_loader import load_model`, with `~/.claude/ds-toolkit/harness` on `sys.path`)
+  and the holdout data with the project's code and writes
   `.dsguard/scratch/eval.parquet` (or `.csv` if pyarrow is missing). Don't modify project files.
 - Never score on training rows; diagnostics on training data are meaningless.
 - For multiclass, diagnose one-vs-rest per important class (binary target and a probability column).
@@ -39,18 +56,19 @@ The harness needs one row per **held-out** example with:
 Use the project's interpreter: `.venv/bin/python` if it exists; otherwise ask, or use `python3`
 if it can import pandas.
 
-## 3. Run the harness
+## 4. Run the harness
 
 ```bash
 <project-python> ~/.claude/ds-toolkit/harness/model_diagnostics.py \
   --data .dsguard/scratch/eval.parquet --target <y> --pred <p> \
-  --segments <cols…> --time <col> --id <col> [--model <path> to add permutation importance]
+  --segments <cols…> --time <col> --id <col> \
+  [--model <path> (+ --trust-pickle / --model-class … as needed) | --factory module:function]
 ```
 
-Only pass `--model` for an artifact this project produced (it is unpickled). Then read
+The model flags add permutation importance; the same loader flags as in step 2 apply. Then read
 `diagnostics.md` and, for detail, `diagnostics.json` in the printed directory.
 
-## 4. Interpret: go beyond the flags
+## 5. Interpret: go beyond the flags
 
 - **Headline**: is the metric good *for this problem*? Compare with a trivial baseline (prevalence, mean or last value) and with any documented previous model.
 - **too-good / dominant-feature**: treat these as leakage until proven otherwise, and hand them to the `leakage-auditor`.
@@ -62,7 +80,7 @@ Only pass `--model` for an artifact this project produced (it is unpickled). The
 - **Importance**: compare permutation importance with what domain knowledge says should matter. An important but nonsensical feature is a red flag. Redundant pairs mean you can simplify.
 - **Thresholds** (binary): tie them to the operating point the business would use (capacity, cost of false positives vs false negatives).
 
-## 5. Recommend
+## 6. Recommend
 
 Rank 3–7 concrete next experiments by expected gain and effort. Examples:
 - add a spline or log of feature X;
