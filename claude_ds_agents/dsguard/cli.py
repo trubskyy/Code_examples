@@ -8,17 +8,18 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from . import cleanup, code, docs, exposure, gateway, licenses, pysec, secrets, sql, vulns
+from . import cleanup, code, docs, exposure, gateway, leakage, licenses, pysec, secrets, sql, vulns
 from .core import SEVERITY_ORDER, CheckResult, build_context, ensure_state_dir, find_root
 
 CHECKS = {
     "gateway": gateway.run, "secrets": secrets.run, "exposure": exposure.run, "pysec": pysec.run,
-    "licenses": licenses.run, "vulns": vulns.run, "sql": sql.run, "code": code.run, "docs": docs.run,
+    "licenses": licenses.run, "vulns": vulns.run, "sql": sql.run, "code": code.run, "leakage": leakage.run,
+    "docs": docs.run,
     "cleanup": cleanup.run,
 }
 GROUPS = {
     "security": ["gateway", "secrets", "exposure", "pysec", "licenses", "vulns"],
-    "quality": ["code", "sql", "docs"],
+    "quality": ["code", "leakage", "sql", "docs"],
     "commit": ["gateway", "secrets"],
     "all": list(CHECKS),
 }

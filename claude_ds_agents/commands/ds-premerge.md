@@ -29,12 +29,14 @@ changed file list:
 | `security-auditor` | always |
 | `code-reviewer` | any `.py` or `.ipynb` changed |
 | `sql-reviewer` | any `.sql` changed, the dsguard sql check found queries in changed files, or dbt models changed |
+| `leakage-auditor` | changed files touch training, feature or split code (sklearn/xgboost/lightgbm/torch imports, `fit`, feature SQL), or dsguard `leakage` has findings. Tell it: **static and code review only**; no data materialization in a pre-merge run. |
+| `llm-evaluator` | prompts, LLM call sites or parsing of LLM output changed **and** a golden set plus `.dsguard/evals/last.json` exist. Tell it: **re-run against the baseline only**, and ask before running more than 200 calls. |
 
 Tell each agent: "Scope: changed since <base>. Files: <list>. Use `--changed-since <base>` for
 dsguard. Return your report in your standard format."
 
-Don't run `documenter`, `cleanup-agent` or `refactor-advisor` here. They are on-demand (use
-`/ds-audit` or call them by name).
+Don't run `documenter`, `cleanup-agent`, `refactor-advisor` or `model-diagnostics` here. They
+are on-demand (use `/ds-audit` or call them by name).
 
 ## Step 3: merge into one report
 

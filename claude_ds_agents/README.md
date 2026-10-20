@@ -33,6 +33,10 @@ out of a finding. Agents read the script output first, then do what scripts can'
 | **Code quality** | ruff, complexity, nesting, length, args, duplicate functions (rename-insensitive), `iterrows`, concat in a loop, chained assignment, `merge` without `validate=`, unseeded splits, swallowed exceptions | Silent pandas errors, leakage, reproducibility, LLM call robustness, performance |
 | **Refactoring** | Same metrics and duplicate fingerprints as evidence | What to extract, in what order, at what risk |
 | **Docs** | Docstring coverage, **stale docstring params**, missing README, notebooks without narrative. **`verify-docs-only` proves an edit changed only docstrings and comments** (AST diff). | Writing the docs |
+| **Leakage (code)** | AST, notebook cells in run order: preprocessor/selector/imputer fitted before any split or CV, `.fit()` on test/val-named data, oversampling before the split, `shift(-n)`, backfill | What is known at prediction time; snapshot tables; as-of joins |
+| **Leakage (data)** | `harness/leakage_check.py`: shared ids/groups across splits, duplicate feature rows, normalized and word-set duplicate texts, temporal overlap, feature timestamps after event time, columns too predictive alone (raw and missingness), target copies, id/row-order leakage, PSI drift | Confirming each hit is a real leak, choosing the fix |
+| **Model diagnostics** | `harness/model_diagnostics.py` on any framework's predictions: AUC/AP/log-loss/Brier/ECE or RMSE/MAE/R²/bias, calibration and threshold tables, residual structure per feature (eta²), weakest segments, metric over time, single-feature strength, redundant pairs, permutation importance (optional model), worst rows, plots | Baselines, causes, which experiments to run next |
+| **LLM evals** | `harness/llm_eval.py`: golden-set runner calling *your* gateway function; exact/normalized/contains/regex/JSON/field/numeric checks, by-tag pass rates, error rate, consistency over repeats, p50/p95 latency, tokens and cost, judge-vs-human kappa, response cache, pass→fail diff vs baseline (exit 1) | Building the golden set, judge rubric, diagnosing regressions, significance |
 | **Cleanup** | Junk dirs and files, suspect names, empty/large/identical files, unimported modules. **Apply is a script**: moves files to `.dsguard/trash/<stamp>` (restorable) or `git rm --cached`; refuses paths outside the repo. The hook **asks** before any `rm -r`. | Verifying a module is really unused, choosing what goes into the plan |
 
 ## Agents (in `agents/`)
@@ -45,6 +49,12 @@ out of a finding. Agents read the script output first, then do what scripts can'
 | `refactor-advisor` | no | Ranked refactor proposals with sketches |
 | `documenter` | docs only | Docstrings, README, data dictionary; must pass `verify-docs-only` |
 | `cleanup-agent` | plan only | Writes `.dsguard/cleanup-plan.json`, applies only after you approve |
+| `leakage-auditor` | scratch only | Code + data leakage, eval contamination for LLM projects |
+| `model-diagnostics` | scratch only | Builds the eval table, runs the harness, ranks next experiments |
+| `llm-evaluator` | eval files | Golden sets, adapters, runs and regression diagnosis via the gateway |
+
+"Scratch only" agents write helper scripts and data extracts under `.dsguard/scratch/`, never
+into project code.
 
 Commands: `/ds-premerge [base]` (gate on the diff) and `/ds-audit [path]` (whole project).
 Call any agent directly too: "use the sql-reviewer on queries/".
@@ -94,12 +104,28 @@ Reports land in `.dsguard/reports/` (git-ignored automatically).
 python -m pytest -q claude_ds_agents/tests
 ```
 
-## Roadmap: next agents (each needs its own deterministic harness)
+## Harness scripts (need numpy + pandas; llm_eval is stdlib only)
+
+Run them with the **project's** interpreter so they can load its data and code:
+
+```bash
+.venv/bin/python ~/.claude/ds-toolkit/harness/model_diagnostics.py --data eval.parquet --target y --pred p \
+    --segments region plan --time scored_at --id customer_id
+.venv/bin/python ~/.claude/ds-toolkit/harness/leakage_check.py --train train.parquet --test test.parquet \
+    --target y --id customer_id --time event_ts --text notes
+.venv/bin/python ~/.claude/ds-toolkit/harness/llm_eval.py run --cases evals/golden.jsonl \
+    --target evals.eval_targets:extract --baseline .dsguard/evals/last.json
+```
+
+Each writes JSON (for agents and CI) and Markdown (for you) under `.dsguard/`. matplotlib,
+pyarrow and joblib are optional. Metrics are implemented in `harness/common.py`, so sklearn is
+not required.
+
+## Roadmap
 
 | Agent | Deterministic part to build first |
 |---|---|
-| `model-diagnostics` | A script that loads a model and eval set and computes metrics by segment, calibration, residuals vs each feature, permutation/SHAP importance and learning curves, writing JSON and plots. The agent interprets them. |
-| `leakage-auditor` | Train/test overlap and near-duplicate detection, features with suspiciously high single-feature AUC, timestamp ordering checks, fit-before-split AST rule |
-| `llm-eval` | Golden-set runner through the gateway: exact/structured metrics, judge scores with agreement checks, cost/latency/token report, regression diff vs last run |
 | `stats-reviewer` | Power and sample-size calculator, multiple-comparison correction, SRM check for A/B tests |
 | `team-pr-reviewer` | dsguard on the PR diff plus your team standards file; the agent writes coaching feedback |
+| `monitoring` | Scheduled PSI/metric drift on production scoring tables, reusing `common.psi` and `model_diagnostics` |
+| `stakeholder-writer` | Pulls numbers only from diagnostics/eval JSON, so summaries cannot invent results |

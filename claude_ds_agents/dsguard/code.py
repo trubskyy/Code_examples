@@ -106,7 +106,9 @@ def _pitfalls(src: PySource, result: CheckResult) -> None:
         if isinstance(node, ast.Call):
             name, full = call_name(node.func), dotted_name(node.func)
             if name in ("iterrows", "itertuples"):
-                add("row-iteration", "warn", node, f".{name}() loops in Python; vectorize or use groupby/merge")
+                # iterrows builds a Series per row (slow, loses dtypes); itertuples is fine on small tables.
+                add("row-iteration", "warn" if name == "iterrows" else "info", node,
+                    f".{name}() loops in Python; vectorize or use groupby/merge if the frame is large")
             elif name == "apply" and (ax := kwarg(node, "axis")) and getattr(ax.value, "value", None) in (1, "columns"):
                 add("row-apply", "info", node, ".apply(axis=1) is a Python loop per row; vectorize if hot")
             elif name == "merge" and kwarg(node, "validate") is None:

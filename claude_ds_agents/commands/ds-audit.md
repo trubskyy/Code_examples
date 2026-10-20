@@ -11,8 +11,11 @@ Audit this whole repository (or only `$ARGUMENTS` if a path is given).
    ~/.claude/ds-toolkit/bin/dsguard run all --format text --limit 30 [--paths $ARGUMENTS]
    ```
 2. Dispatch **in parallel** with full-project scope: `security-auditor`, `code-reviewer`,
-   `refactor-advisor`, plus `sql-reviewer` if the project has SQL. Also run `cleanup-agent`
-   with the instruction: **plan only, do not apply**.
+   `refactor-advisor`, plus `sql-reviewer` if the project has SQL and `leakage-auditor` if it
+   trains models (code and static checks; data checks only if the training data is reachable
+   locally). Also run `cleanup-agent` with the instruction: **plan only, do not apply**.
+   Don't run `model-diagnostics` or `llm-evaluator`: they need an evaluation set and may cost
+   money. List them under "Suggested next" with what they would need.
 3. Don't run `documenter`; it edits files. Instead, report the docs coverage numbers from
    dsguard and offer to run it.
 4. Write `.dsguard/reports/audit-<YYYYMMDD-HHMM>.md` and print it:
@@ -21,10 +24,11 @@ Audit this whole repository (or only `$ARGUMENTS` if a path is given).
 # Project audit: <repo name>
 ## Health summary
 | Area | Status | Key issue |
-(security, LLM gateway, data exposure, licenses, code correctness, SQL, docs, hygiene, structure)
+(security, LLM gateway, data exposure, licenses, code correctness, leakage, SQL, docs, hygiene, structure)
 ## Must fix
 ## Top refactors (from refactor-advisor, top 3)
 ## Cleanup plan (from cleanup-agent; awaiting approval at .dsguard/cleanup-plan.json)
+## Suggested next (model-diagnostics / llm-evaluator and what they need)
 ## Not covered
 ```
 
