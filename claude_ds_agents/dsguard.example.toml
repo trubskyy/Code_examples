@@ -1,0 +1,55 @@
+# dsguard configuration. install.py copies this to ~/.claude/dsguard.toml (company-wide policy);
+# override per project with ./dsguard.toml or [tool.dsguard] in pyproject.toml. Later files win,
+# keys merge. Every default lives in dsguard/core.py. Run /ds-setup on a new machine to fill the TODOs.
+
+[llm_gateway]
+# TODO(work machine): run `/ds-setup` or `dsguard suggest-gateway <gateway code>` to fill this in.
+# "ban": projects import the company gateway package; provider SDKs (openai, anthropic, ...) are
+#        blocked everywhere else.
+# "require_gateway_base_url": projects use a provider SDK, but every client must point base_url
+#        at an allowed gateway host.
+mode = "ban"
+allowed_hosts = []          # e.g. ["llm-gateway.yourcompany.internal"] (glob patterns allowed)
+exempt_paths = []           # e.g. ["src/llm_gateway/**"] where the gateway client itself lives
+
+[secrets]
+scan_history = true         # with gitleaks installed, also scan git history
+allow_paths = []
+
+[exposure]
+allowed_data_paths = ["**/fixtures/**", "**/testdata/**", "tests/data/**"]
+pii_email_allow_domains = ["example.com"]
+
+[licenses]
+# Every package is reported as "always free" (MIT, BSD, Apache, ISC, PSF, ...) or as having
+# "potential issues", with what the obligation means: weak-copyleft, unknown, strong-copyleft,
+# network-copyleft, restricted. Nothing fails until a policy exists; then list families here, e.g.
+# block_families = ["network-copyleft", "restricted"]
+block_families = []
+python = ""                 # project interpreter; default: .venv/bin/python, venv/bin/python
+[licenses.exceptions]
+# "some-package" = "approved by legal 2026-03, ticket LEGAL-123"
+
+[sql]
+dialect = "tsql"            # SQL Server; enables T-SQL rules (NOLOCK, cursors, INT division, AVG(int), TOP)
+[sql.partitioned_tables]
+# TODO(work machine): large/partitioned tables and the column every query should filter on.
+# "dbo.FactSales" = "SaleDate"
+
+[code]
+max_function_lines = 60
+max_complexity = 10
+max_nesting = 4
+max_args = 7
+ruff = true
+
+[docs]
+min_public_coverage = 0.8
+
+[cleanup]
+large_file_mb = 10
+entrypoints = ["scripts/**", "dags/**"]
+keep = []
+
+[hooks]
+ask_on_recursive_rm = true

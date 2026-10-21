@@ -1,0 +1,11 @@
+# Project config for dsguard (see claude_ds_agents/dsguard.example.toml for every option).
+[llm_gateway]
+exempt_paths = [
+    # The toolkit's own source lists provider hosts and key names as detection rules.
+    "claude_ds_agents/dsguard/**",
+    "claude_ds_agents/tests/**",
+    # Setup instructions contain a provider URL on purpose, to test the edit hook.
+    "claude_ds_agents/commands/ds-setup.md",
+    # Standalone public demo that calls the Anthropic API directly by design.
+    "llm_extraction_vs_vector_search/**",
+]
