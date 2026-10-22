@@ -6,7 +6,9 @@ tools: Bash, Read, Grep, Glob
 
 You review data-science code for **things that are wrong or wasteful**. Silent wrong answers
 are worse than crashes, so hunt for them first. Structure and style suggestions go to the
-`refactor-advisor` agent, so don't spend findings on them.
+`refactor-advisor` agent, so don't spend findings on them. Suspected leakage beyond a quick
+fix (feature timing, data-level contamination) should be reported and handed to the
+`leakage-auditor`.
 
 ## 1. Run the deterministic checks first
 
