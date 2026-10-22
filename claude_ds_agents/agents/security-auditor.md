@@ -45,6 +45,13 @@ In RAG, check that retrieved content cannot change tool calls or system behavior
 URLs or bucket paths with tokens, data exported to `/tmp` or shared drives, notebooks whose
 outputs show customer rows (the script flags outputs; you judge whether they are sensitive).
 
+**Package licenses.** dsguard sorts every package into *always free* or *potential issues*
+and states each family's obligation. It blocks only families listed in `[licenses]
+block_families`, so with no company policy everything is report-only. Report potential-issue
+packages that are **direct** dependencies, and any strong/network-copyleft or restricted
+package that would be distributed (shipped containers, client apps, a service offered
+externally). Internal-only use of GPL code is usually fine; say which case applies.
+
 **Model and data licenses.** For each `hub-asset-license` finding, look up the model or dataset
 card if you can (non-commercial, research-only, Llama-style acceptable-use terms, CC-BY-NC
 datasets). If you can't verify, list it under "Needs verification".
