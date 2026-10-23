@@ -1,0 +1,4 @@
+torch>=2.0
+matplotlib>=3.7
+numpy
+pillow
