@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from . import cleanup, code, daybook, docs, exposure, gateway, leakage, licenses, onboard, pysec, secrets, sql, vulns
@@ -83,6 +83,13 @@ def cmd_run(args) -> int:
         "files_in_scope": len(ctx.files), "blocked": blocked, "results": [r.to_dict() for r in results],
     }
     saved = None if args.no_save else _save(root, payload)
+    counts = {s: sum(f.severity == s for r in results for f in r.findings) for s in SEVERITY_ORDER}
+    verdict = "BLOCKED" if counts["block"] else "WARNINGS" if counts["warn"] else "OK"
+    journal, mode = daybook.resolve_journal(root, ctx.config["daybook"])
+    known = {"mode": mode, "journal": str(journal)} if journal else {}
+    daybook.touch(root, ctx.config["daybook"], date.today(), **known,
+                  dsguard={"date": date.today().isoformat(), "verdict": verdict, "checks": ",".join(r.name for r in results),
+                           "scope": payload["scope"], **counts})
     if args.format == "json":
         print(json.dumps(payload, indent=2))
     else:
@@ -133,6 +140,11 @@ def main(argv: list[str] | None = None) -> int:
     day.add_argument("--date", help="YYYY-MM-DD, default today")
     day.add_argument("--since", help="md-check: date or ref (default today)")
     day.set_defaults(func=daybook.main)
+
+    proj = sub.add_parser("projects", help="every project the toolkit has touched, with journal and check status")
+    proj.add_argument("--root", default=".")
+    proj.add_argument("--format", choices=["text", "json"], default="text")
+    proj.set_defaults(func=lambda a: daybook.main(argparse.Namespace(root=a.root, action="projects", format=a.format, date=None)))
 
     apply = sub.add_parser("apply-cleanup", help="execute an approved cleanup plan (reversible)")
     apply.add_argument("plan")

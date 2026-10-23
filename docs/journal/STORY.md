@@ -139,6 +139,22 @@ choices assumed this repo. Four were fixed:
 This repo keeps its in-repo journal (repo mode). A throwaway R project without git was used
 to try the private mode end to end.
 
+Then the larger point landed: not just the daily skills, **the whole toolkit** is meant to be
+one set of skills over all the user's projects. Most of it was already user-level, but three
+gaps kept it tied to individual repos:
+- **The commit gate had to be linked into each repo.** An opt-in machine-wide git hook
+  dispatcher now runs the gate in every repo. It always hands over to the repo's own hooks, so
+  pre-commit and Git LFS keep working, and a missing toolkit never blocks a commit.
+- **Claude in another project didn't know the toolkit existed.** A short managed block in
+  `~/.claude/CLAUDE.md` now tells it, in every session.
+- **The project list only knew about the daily skills.** Every `dsguard` run now registers its
+  project with the last verdict, so `dsguard projects` gives one view across all of them.
+
+The installer stays reversible: it keeps the user's own CLAUDE.md text, backs files up, and
+refuses to override a global hooks setting that something else owns.
+
+An open question for the user: whether the toolkit should move out of `Code_examples` into a
+repository of its own, since it is now infrastructure rather than an example.
+
 **Next:** run `/ds-end-day` at the end of the session, Friday edition, to exercise the full
-loop. Then install on the work machine (`install.py`, `/ds-setup`) and use the daily skills
-there.
+loop. Then install on the work machine (`install.py --git-hooks`, then `/ds-setup`).

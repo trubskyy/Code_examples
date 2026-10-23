@@ -77,13 +77,24 @@ def load_registry(cfg: dict) -> dict:
         return {}
 
 
+def touch(root: Path, cfg: dict, today: date, **fields) -> None:
+    """Record that a project was worked on (by any toolkit command), merging in extra fields.
+
+    Never raises: the registry is a convenience, and failing to write it must not break a check.
+    """
+    try:
+        registry = load_registry(cfg)
+        key = str(root.resolve())
+        registry[key] = registry.get(key, {"mode": None, "journal": None}) | {
+            "name": root.name, "last_seen": today.isoformat(), **fields}
+        _home(cfg).mkdir(parents=True, exist_ok=True)
+        (_home(cfg) / "projects.json").write_text(json.dumps(registry, indent=2, sort_keys=True) + "\n")
+    except OSError:
+        pass
+
+
 def register(root: Path, cfg: dict, journal: Path, mode: str, today: date) -> None:
-    registry = load_registry(cfg)
-    key = str(root.resolve())
-    registry[key] = registry.get(key, {}) | {"name": root.name, "mode": mode, "journal": str(journal),
-                                              "last_seen": today.isoformat()}
-    _home(cfg).mkdir(parents=True, exist_ok=True)
-    (_home(cfg) / "projects.json").write_text(json.dumps(registry, indent=2, sort_keys=True) + "\n")
+    touch(root, cfg, today, mode=mode, journal=str(journal))
 
 
 def resolve_journal(root: Path, cfg: dict) -> tuple[Path | None, str | None]:
@@ -96,7 +107,7 @@ def resolve_journal(root: Path, cfg: dict) -> tuple[Path | None, str | None]:
     if (in_repo / "STORY.md").exists():
         return in_repo, "repo"
     entry = load_registry(cfg).get(str(root.resolve()))
-    if entry:
+    if entry and entry.get("journal"):
         return Path(entry["journal"]), entry["mode"]
     if (private / "STORY.md").exists():
         return private, "home"
@@ -320,19 +331,19 @@ def init_journal(root: Path, cfg: dict, location: str | None, today: date) -> tu
 
 
 def projects(cfg: dict, today: date) -> list[dict]:
-    """Every registered project with where it stands: last story entry, open plan items, last seen."""
+    """Every project the toolkit has touched: last seen, journal state, open plan items, last dsguard verdict."""
     out = []
     for path, entry in load_registry(cfg).items():
-        journal = Path(entry["journal"])
-        story = journal / "STORY.md"
-        dates = STORY_ENTRY.findall(story.read_text()) if story.exists() else []
-        todays, previous = latest_plan(journal, today)
+        journal = Path(entry["journal"]) if entry.get("journal") else None
+        story = journal / "STORY.md" if journal else None
+        dates = STORY_ENTRY.findall(story.read_text()) if story and story.exists() else []
+        todays, previous = latest_plan(journal, today) if journal else (None, None)
         plan = todays or previous
         open_items = [i for i in checkbox_items(plan.read_text()) if not i["done"]] if plan else []
-        out.append({"name": entry["name"], "path": path, "exists": Path(path).is_dir(), "mode": entry["mode"],
+        out.append({"name": entry["name"], "path": path, "exists": Path(path).is_dir(), "mode": entry.get("mode"),
                     "last_seen": entry.get("last_seen"), "last_story_entry": dates[-1] if dates else None,
                     "latest_plan": plan.stem if plan else None, "open_items": len(open_items),
-                    "top_open": [i["text"] for i in open_items[:3]]})
+                    "top_open": [i["text"] for i in open_items[:3]], "dsguard": entry.get("dsguard")})
     return sorted(out, key=lambda p: p["last_seen"] or "", reverse=True)
 
 
@@ -402,8 +413,10 @@ def render_projects(items: list[dict]) -> str:
     lines = [f"{len(items)} project(s), most recent first:"]
     for p in items:
         missing = "" if p["exists"] else "  (folder not found)"
-        lines.append(f"  {p['name']:<28} last seen {p['last_seen'] or '-':<10}  story {p['last_story_entry'] or '-':<10}"
-                     f"  open items {p['open_items']:<3} [{p['mode']}]  {p['path']}{missing}")
+        check = p.get("dsguard") or {}
+        verdict = f"{check.get('verdict', '-')} {check.get('date', '')}".strip()
+        lines.append(f"  {p['name']:<24} last seen {p['last_seen'] or '-':<10}  story {p['last_story_entry'] or '-':<10}"
+                     f"  open {p['open_items']:<3} dsguard {verdict:<20} [{p['mode'] or 'no journal'}]  {p['path']}{missing}")
         lines += [f"      [ ] {t}" for t in p["top_open"]]
     return "\n".join(lines)
 

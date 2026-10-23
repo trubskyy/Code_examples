@@ -18,6 +18,12 @@ projects. It runs in Claude Code on the lead's own machine and covers six jobs:
 | **Maintain** | Documentation and repository cleanup, done safely |
 | **Daily rhythm** | Start-of-day plan sized to your time; end-of-day commit, docs, story and next plan; Friday comment pass |
 
+**Scope: every project on the machine.** Nothing is installed per repository. Agents,
+commands, skills, the Claude hook, the CLAUDE.md block, the policy file and (opt-in) the
+global git hooks all live in `~/.claude` or the user's git config. They act on whatever project
+Claude Code or git is running in. Projects contribute only an optional `dsguard.toml`, a
+self-ignoring `.dsguard/` folder, and their journal.
+
 ## 2. Design principles
 
 1. **Deterministic first.** If a regex, AST walk, metric or metadata lookup can decide something,
@@ -126,7 +132,9 @@ The same picture as text:
 | Component | Trigger | Decision |
 |---|---|---|
 | `hooks/pretooluse_guard.py` | Claude Code `PreToolUse` on `Write\|Edit\|MultiEdit\|NotebookEdit\|Bash` | **deny**: new content imports a provider SDK, references a provider host, or contains a high-confidence secret; a Bash command calls a provider host. **ask**: recursive `rm`. Otherwise silent. |
-| `git-hooks/pre-commit` | `git commit` | `dsguard run commit --staged`: gateway and secrets on staged files; a block fails the commit |
+| `git-hooks/global/` (opt-in, `install.py --git-hooks`) | any git hook in **any repo**, via global `core.hooksPath` | `_dispatch`: on pre-commit, `dsguard run commit --staged` (a block fails the commit; a missing or broken toolkit doesn't); then it **always runs the repo's own `.git/hooks/<name>`**, so pre-commit framework, Git LFS and custom hooks keep working. Opt-outs: `git config ds.guard false`, `DSGUARD_SKIP=1`. Never installed over an existing global `core.hooksPath`. |
+| `git-hooks/pre-commit` | `git commit` in a repo it's linked into | Same gate, per repo, for machines where the global setting is taken |
+| `claude/CLAUDE-block.md` | every Claude Code session | Installed as a marked block in `~/.claude/CLAUDE.md`: tells Claude in any project that the toolkit exists, which agent fits which job, to gate commits, and to read the project's story |
 
 The hook **fails open**: an internal error lets the edit through, with a message on stderr. A
 broken hook must not stop work. The pre-commit hook and `/ds-premerge` run the same rules as
@@ -336,7 +344,9 @@ dsguard/core.py DEFAULTS  <  ~/.claude/dsguard.toml  <  [tool.dsguard] in pyproj
   ds-toolkit -> <repo>/claude_ds_agents     symlink: `git pull` updates everything
   agents/*.md, commands/*.md, skills/<name>/ -> symlinks
   settings.json                              PreToolUse hook entry (backed up on change)
+  CLAUDE.md                                  your text + the toolkit's marked block (backed up on change)
   dsguard.toml                               your policy (copied once, then yours)
+~/.gitconfig  core.hooksPath                 opt-in: git-hooks/global for every repo
 
 <project>/docs/journal/                      journal, "repo" mode: committed with the project
   STORY.md                                   continuous story, one entry per working day
@@ -344,7 +354,8 @@ dsguard/core.py DEFAULTS  <  ~/.claude/dsguard.toml  <  [tool.dsguard] in pyproj
   .last-comment-review                       commit where the last Friday comment pass ended
 
 ~/.claude/journal/                           private journals, "home" mode (its own git repo)
-  projects.json                              registry of every project the daily skills touched
+  projects.json                              registry of every project the toolkit touched (last dsguard
+                                             verdict, journal location, last seen); `dsguard projects`
   <project>-<id>/                            same layout as above, one folder per project
 
 <project>/.dsguard/                          self-ignoring (contains .gitignore "*")
@@ -371,12 +382,13 @@ dsguard/core.py DEFAULTS  <  ~/.claude/dsguard.toml  <  [tool.dsguard] in pyproj
 
 ## 9. Testing
 
-`tests/` has 75 tests: 74 pass with sklearn, LightGBM and XGBoost installed, and the PyTorch
+`tests/` has 81 tests: 80 pass with sklearn, LightGBM and XGBoost installed, and the PyTorch
 test skips without torch. They cover:
 - every dsguard check, using planted positives and clean negatives;
 - verify-docs-only and the cleanup apply/restore round trip;
 - harness scripts on synthetic data with known planted problems (leaks, a weak segment, a missed non-linearity, drift, a volume drop);
 - real-framework round trips for the model loader;
+- machine-wide use: the git hook dispatcher in throwaway repos (blocks secrets, chains the repo's own hooks, honours opt-outs, never blocks when the toolkit is missing), installer round trips for the CLAUDE.md block and global hooks (never overriding an existing `core.hooksPath`), the cross-project registry;
 - the daybook: workday rollover, plan checkboxes, comment-only TODOs, next-step sections, link checks, the weekly-review marker, repo vs private journals, the cross-project registry, non-git projects, test detection for pytest/npm/make/R;
 - a pickle built to run code when loaded, which `scan` must leave inert;
 - the facts verifier accepting rounded and percent forms and rejecting invented, uncited or dangling numbers.

@@ -1,0 +1,37 @@
+#!/bin/sh
+# Machine-wide git hook dispatcher for the DS toolkit (opt-in: install.py --git-hooks).
+#
+# `git config --global core.hooksPath <this dir>` makes git look here, instead of each repo's
+# .git/hooks, for every repository on the machine. So that nothing breaks, every hook name is a
+# stub that calls this dispatcher, which:
+#   1. on pre-commit, runs the dsguard commit gate (LLM gateway + secrets on staged files);
+#   2. then always runs the repo's own hook (.git/hooks/<name>) if there is one, so pre-commit
+#      framework hooks, Git LFS hooks and hand-written hooks keep working as before.
+#
+# Opt out per repo:   git config ds.guard false
+# Skip once:          DSGUARD_SKIP=1 git commit ...
+# A broken or missing toolkit never blocks a commit; only a real `block` finding does.
+
+hook="$1"
+shift
+
+if [ "$hook" = "pre-commit" ] && [ "${DSGUARD_SKIP:-0}" != "1" ] \
+   && [ "$(git config --bool ds.guard 2>/dev/null || echo true)" != "false" ]; then
+    dsguard="${DSGUARD_BIN:-$HOME/.claude/ds-toolkit/bin/dsguard}"
+    if [ -x "$dsguard" ]; then
+        "$dsguard" run commit --staged --no-save
+        rc=$?
+        if [ "$rc" -eq 1 ]; then
+            echo "dsguard: commit blocked (fix the findings above, or DSGUARD_SKIP=1 to bypass once)" >&2
+            exit 1
+        elif [ "$rc" -ne 0 ]; then
+            echo "dsguard: gate could not run (exit $rc); commit allowed" >&2
+        fi
+    fi
+fi
+
+hooks_dir="$(git rev-parse --git-common-dir 2>/dev/null)/hooks"
+if [ -x "$hooks_dir/$hook" ]; then
+    exec "$hooks_dir/$hook" "$@"
+fi
+exit 0

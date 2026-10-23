@@ -3,8 +3,23 @@
 ## What it is
 
 A personal automation toolkit for a data-science lead who works on tabular, text and LLM
-projects. It plugs into **Claude Code** on your own machine (`~/.claude`), so every project
-gets the same specialist agents, commands and guardrails.
+projects. It is **one set of skills, agents and guardrails for all your projects**: install it
+once on a machine and it's there in every repository you open in Claude Code. No per-project
+setup is needed.
+
+| Installed once, in `~/.claude` | What it gives every project |
+|---|---|
+| Agents, commands, skills | The same specialists, `/ds-premerge`, `/ds-audit`, `/ds-start-day`, `/ds-end-day` everywhere |
+| Managed block in `~/.claude/CLAUDE.md` | Claude knows, in any project, that the toolkit exists and when to use which part |
+| PreToolUse hook | Gateway bypasses and secrets blocked before Claude writes them, in any project |
+| Global git hooks (opt-in `--git-hooks`) | The commit gate in every repo on the machine; each repo's own hooks still run |
+| `~/.claude/dsguard.toml` | Your policy (gateway, SQL dialect, licenses, daily rhythm) for all projects |
+| `~/.claude/journal/projects.json` | One list of every project the toolkit has touched: last check verdict, journal, open plan items (`dsguard projects`) |
+
+Each project only gets what's specific to it:
+- an optional `dsguard.toml` to override settings;
+- a self-ignoring `.dsguard/` folder for reports and scratch;
+- its journal: story and daily plans, in the repo or privately in `~/.claude/journal/`.
 
 It has two halves that work together:
 
@@ -35,7 +50,7 @@ How the pieces fit is described in [ARCHITECTURE.md](ARCHITECTURE.md).
 | | |
 |---|---|
 | **Built** | 11 agents, 3 commands, 2 skills (start/end of day), 11 `dsguard` checks plus 5 tools, 6 harness scripts, the edit-time hook, the pre-commit hook, the scheduler wrapper, the installer |
-| **Verified** | 75 tests; 74 pass with sklearn, LightGBM and XGBoost installed, and PyTorch skips. CLI runs end to end on synthetic data; installer install/uninstall in a throwaway home; the hook against sample tool calls. |
+| **Verified** | 81 tests; 80 pass with sklearn, LightGBM and XGBoost installed, and PyTorch skips. CLI runs end to end on synthetic data; installer install/uninstall (CLAUDE.md block, global git hooks) in a throwaway home; the commit dispatcher in throwaway repos; the edit hook against sample tool calls. |
 | **Not yet verified** | PyTorch model loading (implemented; PyTorch downloads were blocked in the build environment). Agents, commands and skills haven't been run inside a live Claude Code session. |
 | **Waiting on the work machine** | Gateway adoption and SQL Server table list, both via `/ds-setup`. License policy (report-only until you set `block_families`). |
 | **Next** | `stats-reviewer` (A/B tests) and `team-pr-reviewer` (see the end of this file) |
@@ -44,7 +59,7 @@ How the pieces fit is described in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ```bash
 python3 claude_ds_agents/install.py --dry-run   # show what would change
-python3 claude_ds_agents/install.py             # symlinks into ~/.claude, registers the hook, copies the policy file
+python3 claude_ds_agents/install.py --git-hooks # into ~/.claude for every project; --git-hooks gates commits in every repo
 pip install pip-audit bandit sqlfluff           # optional, recommended
 # optional, recommended: install gitleaks to scan git history for secrets
 ```
@@ -59,8 +74,16 @@ Then in Claude Code:
 4. Any agent by name: "use the model-diagnostics agent on models/churn.txt", "use the
    stakeholder-writer for a 5-line exec email on the latest diagnostics".
 
-Per repository, add the commit gate:
-`ln -s ~/.claude/ds-toolkit/git-hooks/pre-commit .git/hooks/pre-commit`
+There is no per-project setup. Open Claude Code in any project and everything above is
+available.
+
+The commit gate:
+- **Without `--git-hooks`**: link it into chosen repos instead:
+  `ln -s ~/.claude/ds-toolkit/git-hooks/pre-commit .git/hooks/pre-commit`
+- **Opt out**: per repo with `git config ds.guard false`, or for one commit with
+  `DSGUARD_SKIP=1 git commit …`.
+- **Existing setting**: if `core.hooksPath` is already set globally (e.g. by company tooling),
+  the installer leaves it alone and says so.
 
 Requirements: Python 3.11+. `dsguard`, the hooks, `llm_eval.py` and `facts.py` need only the
 standard library; the other harness scripts need numpy and pandas. `install.py --uninstall`
@@ -146,7 +169,8 @@ repository, any language, with or without git. The current folder decides the pr
 ~/.claude/ds-toolkit/bin/dsguard run all --changed-since origin/main --format json
 ~/.claude/ds-toolkit/bin/dsguard verify-docs-only
 ~/.claude/ds-toolkit/bin/dsguard suggest-gateway path/to/gateway_client
-~/.claude/ds-toolkit/bin/dsguard day status                     # also: projects | week-files | md-check | mark-review | init
+~/.claude/ds-toolkit/bin/dsguard projects                       # every project: last verdict, journal, open items
+~/.claude/ds-toolkit/bin/dsguard day status                     # also: week-files | md-check | mark-review | init
 ~/.claude/ds-toolkit/bin/dsguard apply-cleanup .dsguard/cleanup-plan.json   # restore-cleanup <stamp> to undo
 ```
 
@@ -217,9 +241,10 @@ claude_ds_agents/
   dsguard/     deterministic engine (core, cli, 11 checks, onboarding, daybook)
   harness/     model_loader, model_diagnostics, leakage_check, llm_eval, drift_monitor, facts, common
   hooks/       pretooluse_guard.py (edit-time guard)
-  git-hooks/   pre-commit
+  claude/      CLAUDE-block.md (managed block for ~/.claude/CLAUDE.md)
+  git-hooks/   pre-commit (per repo), global/ (machine-wide dispatcher + stubs for every hook)
   bin/         dsguard launcher, ds-monitor scheduler wrapper
-  tests/       75 tests
+  tests/       81 tests
 ```
 
 ## Tests

@@ -78,10 +78,20 @@ framework without loading them. Point out pickles (`--trust-pickle` needed, only
 project's own artifacts) and torch state_dicts (need `--model-class` from the project code).
 For models defined in code, note the `--factory module:function` route.
 
-## 6. Per-repository commit gate
+## 6. Commit gate for every repository
 
-For each repo the user names: `ln -s ~/.claude/ds-toolkit/git-hooks/pre-commit <repo>/.git/hooks/pre-commit`
-(ask first; if a pre-commit hook already exists, show it and don't overwrite it).
+Check `git config --global --get core.hooksPath`:
+- **Points at `~/.claude/ds-toolkit/git-hooks/global`**: the gate already covers every repo.
+- **Unset**: offer to enable it machine-wide with `python3 ~/.claude/ds-toolkit/install.py --git-hooks`.
+  Explain that each repo's own hooks (pre-commit framework, Git LFS) still run through the
+  dispatcher; that `git config ds.guard false` opts a repo out; and that `DSGUARD_SKIP=1`
+  skips one commit.
+- **Set to something else** (company tooling): don't change it. Offer per-repo links instead:
+  `ln -s ~/.claude/ds-toolkit/git-hooks/pre-commit <repo>/.git/hooks/pre-commit`. Ask first,
+  and never overwrite an existing hook.
+
+Also confirm `~/.claude/CLAUDE.md` contains the toolkit block (between the `ds-toolkit:start`
+and `ds-toolkit:end` markers); re-run `install.py` if not.
 
 ## Finish
 
