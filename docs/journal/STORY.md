@@ -124,5 +124,21 @@ away:
 This file is the continuous story the user asked for, seeded from the git history. The PR #2
 branch was fast-forwarded onto the merged default branch instead of being rewritten.
 
+Later the same day, the user pointed out that this read as a setup for this one repo, when they
+want the skills in every project. The skills were already installed per user, but several
+choices assumed this repo. Four were fixed:
+- **Journal location.** Each project now chooses once where its journal lives: in the repo, or
+  privately in `~/.claude/journal/` (its own git repo). That matters for shared work repos,
+  where a personal journal doesn't belong.
+- **One registry.** `~/.claude/journal/projects.json` records every project, and
+  `dsguard day projects` shows them all, so starting the day outside a project asks which one
+  to pick up.
+- **Tests.** Test detection covers pytest, npm, make and R, with an override setting.
+- **Projects without git.** These fall back to file modification times.
+
+This repo keeps its in-repo journal (repo mode). A throwaway R project without git was used
+to try the private mode end to end.
+
 **Next:** run `/ds-end-day` at the end of the session, Friday edition, to exercise the full
-loop on this repo. Then adopt the toolkit on the work machine with `/ds-setup`.
+loop. Then install on the work machine (`install.py`, `/ds-setup`) and use the daily skills
+there.

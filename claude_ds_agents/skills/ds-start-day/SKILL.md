@@ -1,12 +1,15 @@
 ---
 name: ds-start-day
-description: Start-of-day planning for the current project. Finds what is still open (yesterday's plan, TODOs, next steps in the docs, uncommitted work), asks how much time you can give the project today, builds a plan that fits that time, and splits the work into what needs you, what Claude can do in this session, and what can run unattended. Use at the start of a working session, or when the user says "start of day", "plan my day" or "what should I work on".
-allowed-tools: Bash(~/.claude/ds-toolkit/bin/dsguard:*), Bash(git status:*), Bash(git log:*), Bash(git diff:*), Read, Grep, Glob, Write, Edit
+description: Start-of-day planning for whatever project you are in (any repo, any language, with or without git). Finds what is still open (yesterday's plan, TODOs, next steps in the docs, uncommitted work), asks how much time you can give the project today, builds a plan that fits that time, and splits the work into what needs you, what Claude can do in this session, and what can run unattended. Use at the start of a working session, or when the user says "start of day", "plan my day" or "what should I work on".
+allowed-tools: Bash(~/.claude/ds-toolkit/bin/dsguard:*), Bash(git status:*), Bash(git log:*), Bash(git diff:*), Bash(git -C:*), Read, Grep, Glob, Write, Edit
 ---
 
 # Start of day
 
-Plan today's work on this project around the time the user actually has. Facts come from
+Plan today's work on the current project around the time the user actually has. This skill is
+installed once in `~/.claude` and works in every project. The current working directory
+decides which project it is. Never assume a particular layout: every path below comes from
+`dsguard day status`. Facts come from
 `dsguard day`; you decide priorities and wording. Keep the conversation short: one round of
 questions, then the plan.
 
@@ -17,14 +20,26 @@ questions, then the plan.
 ~/.claude/ds-toolkit/bin/dsguard day status --format json     # when you need the detail
 ```
 
-If it reports `story: missing`, run `~/.claude/ds-toolkit/bin/dsguard day init` (creates
-`docs/journal/STORY.md` and `docs/journal/plans/`) and say you did.
+**Not inside a project** (`project` is null, e.g. started from the home directory): show the
+`projects` overview (every project with its last story entry and open plan items, most recent
+first). Ask which one to work on today, and tell the user to open Claude Code in that folder
+(or `cd` there). If they have time for several projects, plan each one separately.
+
+**First time in this project** (`journal.needs_setup` is true): ask once where its journal
+should live, then run `~/.claude/ds-toolkit/bin/dsguard day init --location repo|home`. The
+choice is remembered.
+- **repo**: `<project>/docs/journal/`, committed with the project and visible to the team.
+  Good for your own projects and teams that want the history.
+- **home**: `~/.claude/journal/<project>-<id>/`, private and committed to your own journal
+  repository. Good for shared work repos where a personal journal doesn't belong.
+
+From here on, use `journal.story` and `journal.plans_dir` from the status for every path.
 
 Then read:
 - `plans.today`: the draft written at the end of the last working day for today, if any. It is
   the starting point.
 - `plans.previous`: its **open** items are carry-overs.
-- The last one or two entries of `docs/journal/STORY.md`, for context and where things stand.
+- The last one or two entries of the story (`journal.story`), for context and where things stand.
 - `todos`, `next_steps` (from README/ARCHITECTURE/etc.) and `uncommitted` work.
 - Open PRs and their CI or review state, if GitHub tools are available. A red PR outranks new work.
 
@@ -69,7 +84,7 @@ the decision in **Needs you** and the work after it.
 
 ## 4. Save the plan
 
-Write `docs/journal/plans/<today>.md` (replacing the draft, but keep a line saying it was
+Write `<journal.plans_dir>/<today>.md` (replacing the draft, but keep a line saying it was
 drafted on <date>):
 
 ```markdown

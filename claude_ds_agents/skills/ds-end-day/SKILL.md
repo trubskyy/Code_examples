@@ -1,13 +1,15 @@
 ---
 name: ds-end-day
-description: End-of-day wrap-up for the current project. Commits the day's work through the dsguard gate, runs through the Markdown files and updates them, writes today's entry in the project story (docs/journal/STORY.md), drafts the plan for the next working day, and commits. On the weekly review day (Friday by default) it first runs a comment pass over every code file changed that week, proven not to change behavior. Use when the user says "end of day", "wrap up" or "done for today".
-allowed-tools: Bash(~/.claude/ds-toolkit/bin/dsguard:*), Bash(git status:*), Bash(git log:*), Bash(git diff:*), Bash(git add:*), Bash(git commit:*), Bash(git push:*), Bash(python -m pytest:*), Read, Grep, Glob, Write, Edit, Agent, Task
+description: End-of-day wrap-up for whatever project you are in (any repo, any language, with or without git). Commits the day's work through the dsguard gate, runs through the Markdown files and updates them, writes today's entry in the project's story, drafts the plan for the next working day, and commits. On the weekly review day (Friday by default) it first runs a comment pass over every code file changed that week, proven not to change behavior. Use when the user says "end of day", "wrap up" or "done for today".
+allowed-tools: Bash(~/.claude/ds-toolkit/bin/dsguard:*), Bash(git status:*), Bash(git log:*), Bash(git diff:*), Bash(git add:*), Bash(git commit:*), Bash(git push:*), Bash(git -C:*), Bash(python -m pytest:*), Bash(npm test:*), Bash(make test:*), Bash(Rscript:*), Read, Grep, Glob, Write, Edit, Agent, Task
 ---
 
 # End of day
 
 Close the day so that tomorrow starts from an accurate picture: work committed, docs true,
-story written, plan drafted. Facts come from `dsguard day`; you write. Ask at most one
+story written, plan drafted. Installed once in `~/.claude`, this works in every project; the
+current working directory decides which one. Every path comes from `dsguard day status`, never
+from assumptions about the layout. Facts come from `dsguard day`; you write. Ask at most one
 question (step 2) unless something blocks.
 
 ## 1. Gather facts
@@ -17,8 +19,15 @@ question (step 2) unless something blocks.
 ```
 
 Note `is_weekly_review_day`, `next_workday`, `plans.today`, `commits_today`, `changed_today`,
-`uncommitted`, `md_check_today` and `weekly_review`. If the journal is missing, run
-`dsguard day init`.
+`uncommitted`, `md_check_today`, `weekly_review`, `tests` and the `journal` block (`story`,
+`plans_dir`, `mode`, `commit_root`).
+- **Not inside a project** (`project` is null): ask which project to close out and have the
+  user run this from there.
+- **`journal.needs_setup`**: ask repo or home once (see `ds-start-day`), then run
+  `dsguard day init --location ...`.
+- **`project.git` is false**: there is nothing to commit work to. Do every other step, skip
+  the work commit and say so. Offer `git init` (as a suggestion, not something you run
+  unasked). Home-mode journals are still committed.
 
 ## 2. Commit today's remaining work (one question)
 
@@ -27,7 +36,8 @@ If `uncommitted` lists work files, show them grouped (code, docs, notebooks, oth
 or credentials, and say what you left out.
 
 On yes:
-1. Run the project's fast tests if there are any (`tests` in the status). If they fail, say so.
+1. Run the project's test command (`tests` in the status: pytest, npm, make or R, or the
+   `[daybook] test_command` override) if there is one. If it fails, say so.
    Ask whether to commit anyway (the user decides), and record the failure in the story.
 2. Stage the files explicitly by name; never `git add -A`.
 3. Run `~/.claude/ds-toolkit/bin/dsguard run commit --staged`. On a `block`, stop and report it.
@@ -72,11 +82,11 @@ changing, say so rather than making cosmetic edits.
 
 ## 5. Update today's plan and write the story entry
 
-**Plan**: in `docs/journal/plans/<today>.md`, tick what got done, using the evidence of
+**Plan**: in `<journal.plans_dir>/<today>.md`, tick what got done, using the evidence of
 commits, files and the conversation. Add a short `## End of day` note: done, not done and why,
 surprises.
 
-**Story**: append to `docs/journal/STORY.md` (newest at the bottom):
+**Story**: append to the story file (`journal.story`), newest at the bottom:
 
 ```markdown
 ## 2026-10-23 (Fri)
@@ -98,7 +108,7 @@ the project stands, what has been built, what is in flight, and the open questio
 
 ## 6. Draft the plan for the next working day
 
-Create `docs/journal/plans/<next_workday>.md`, a draft that `ds-start-day` refines once the
+Create `<journal.plans_dir>/<next_workday>.md`, a draft that `ds-start-day` refines once the
 user says how much time they have:
 - Carry over the open items, with a reason where useful.
 - Add the next logical steps from today's work, the README next steps, TODOs and open PRs.
@@ -108,17 +118,21 @@ user says how much time they have:
 
 ## 7. Commit the journal and docs
 
-Stage explicitly:
-- the updated Markdown files;
-- `docs/journal/STORY.md`;
-- today's and the next workday's plans;
-- `docs/journal/.last-comment-review`, on review day.
+The journal is committed to `journal.commit_root`:
 
-Run `dsguard run commit --staged`, then commit:
-`End of day <date>: docs, story, plan for <next_workday>`.
+- **repo mode** (`commit_root` is the project). Stage explicitly: the updated Markdown files,
+  the story, today's and the next workday's plans, and `.last-comment-review` on review day.
+  Run `dsguard run commit --staged`, then commit:
+  `End of day <date>: docs, story, plan for <next_workday>`.
+- **home mode** (`commit_root` is `~/.claude/journal`). Commit the project's Markdown updates
+  in the project repo as above (without journal files). Commit the journal privately with
+  `git -C <commit_root> add <project journal folder> projects.json` and
+  `git -C <commit_root> commit -m "<project>: end of day <date>"`.
 
 Push only if `push_after_commit` is true in the status (`[daybook] push = true` in
-`dsguard.toml`). Otherwise say the commits are local and how many there are.
+`dsguard.toml`, which can be set per project). Otherwise say the commits are local and how
+many there are. Never push the private journal repo unless the user set up a remote for it
+and asked.
 
 ## 8. Report
 

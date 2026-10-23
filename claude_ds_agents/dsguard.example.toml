@@ -55,8 +55,12 @@ keep = []
 ask_on_recursive_rm = true
 
 [daybook]
-# Start-of-day / end-of-day skills. The journal (story + daily plans) is committed with the project.
-dir = "docs/journal"
+# Start-of-day / end-of-day skills. They work in every project; settings here apply to all of
+# them, and a project's own dsguard.toml can override any key (e.g. push, test_command).
+location = "ask"            # where each project's journal lives: repo | home | ask (once per project)
+dir = "docs/journal"        # in-repo location (location = repo)
+home_dir = "~/.claude/journal"   # private journals (its own git repo) + projects.json registry
+test_command = ""           # override test detection (pytest / npm test / make test / testthat)
 workdays = ["Mon", "Tue", "Wed", "Thu", "Fri"]
 weekly_review_day = "Fri"   # end of day on this day adds the weekly comment pass
 push = false                # true: end-of-day pushes after committing

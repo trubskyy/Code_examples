@@ -126,7 +126,8 @@ def main(argv: list[str] | None = None) -> int:
     gw.set_defaults(func=lambda a: print(onboard.suggest(Path(a.path), find_root(Path(a.root)))) or 0)
 
     day = sub.add_parser("day", help="facts for the start-of-day / end-of-day skills")
-    day.add_argument("action", choices=["status", "week-files", "md-check", "mark-review", "init"])
+    day.add_argument("action", choices=["status", "projects", "week-files", "md-check", "mark-review", "init"])
+    day.add_argument("--location", choices=["repo", "home"], help="init: where this project's journal lives")
     day.add_argument("--root", default=".")
     day.add_argument("--format", choices=["text", "json"], default="text")
     day.add_argument("--date", help="YYYY-MM-DD, default today")

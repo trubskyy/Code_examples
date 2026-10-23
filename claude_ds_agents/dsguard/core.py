@@ -107,7 +107,10 @@ DEFAULTS: dict = {
     "cleanup": {"large_file_mb": 10, "entrypoints": [], "keep": []},
     "hooks": {"ask_on_recursive_rm": True},
     "daybook": {
-        "dir": "docs/journal",
+        "dir": "docs/journal",            # in-repo journal location (location = repo)
+        "location": "ask",                # repo | home | ask (ask once per project, then remembered)
+        "home_dir": "~/.claude/journal",  # private journals + projects.json registry
+        "test_command": "",               # override test detection (pytest / npm / make / R)
         "workdays": ["Mon", "Tue", "Wed", "Thu", "Fri"],
         "weekly_review_day": "Fri",
         "push": False,
