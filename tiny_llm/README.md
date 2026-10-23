@@ -40,6 +40,19 @@ Training presets (`--preset`):
 Every setting can be overridden, e.g. `--n_layer 6 --max_iters 10000`. Ctrl+C stops
 training early; the best checkpoint so far is already saved.
 
+After 7 minutes on Newton's *Opticks* (4,000 steps, validation loss 4.55 → 1.47):
+
+```
+$ python chat.py --prompt "The light of the Sun"
+The light of the Sun moves are more dire
+than that Spot. Then the same Light in proportion to a Plate of the Colours be
+made broader than the rest of the Spectrum ...
+```
+
+The model has learned spelling, punctuation, and Newton's vocabulary and
+capitalisation from scratch. It has not learned meaning: with 0.35M parameters,
+it imitates the style of the book.
+
 ## See the network work
 
 ```bash
@@ -49,6 +62,8 @@ python chat.py --prompt "Alice was" --gif run.gif --length 30  # save every step
 ```
 
 On a machine without a screen the picture is saved instead of shown.
+
+![Network picture for the prompt "The light of the Sun"](docs/example_network.png)
 
 Each picture shows one forward pass, the computation that produces one character:
 
@@ -67,6 +82,9 @@ Each picture shows one forward pass, the computation that produces one character
   Red fired positive, blue negative.
 - **Logit lens**. The model's top three guesses if you cut it off after each layer.
   Read top to bottom to see the prediction take shape as information flows up.
+  In the example above, the embedding alone guesses `n` (it only knows the current
+  character), blocks 1-2 lean towards an apostrophe (`Sun's`), and block 3,
+  having read the whole phrase, settles on a space.
 
 ## How it works
 
