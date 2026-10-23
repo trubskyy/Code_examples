@@ -16,6 +16,7 @@ projects. It runs in Claude Code on the lead's own machine and covers six jobs:
 | **Monitor** | Scheduled drift checks on deployed models |
 | **Communicate** | Stakeholder summaries whose numbers are machine-verified |
 | **Maintain** | Documentation and repository cleanup, done safely |
+| **Daily rhythm** | Start-of-day plan sized to your time; end-of-day commit, docs, story and next plan; Friday comment pass |
 
 ## 2. Design principles
 
@@ -151,6 +152,8 @@ dsguard/
   docs.py      docstring coverage, stale params, README; verify_docs_only (docstring-free AST diff)
   cleanup.py   junk, suspect names, orphan modules; reversible apply/restore
   onboard.py   reads a prewritten gateway client and drafts [llm_gateway] config
+  daybook.py   facts for the daily skills: workdays and next workday, open plan items, TODO
+               comments, next-step sections, today's/this week's changed files, Markdown link check
 ```
 
 **Check contract.** Each check is `run(ctx: Context) -> CheckResult`, registered in
@@ -228,6 +231,8 @@ same template: **run the script → judgement checklist → standard report**.
 | `/ds-premerge [base]` | `dsguard run all --changed-since base` → choose reviewers from the diff (security always; code if .py/.ipynb changed; sql if SQL; leakage if training code; llm-evaluator only against an existing baseline) → run them in parallel → merge into `.dsguard/reports/premerge-*.md`. Verdict: any block = BLOCKED, any high = FIX BEFORE MERGE, else READY. |
 | `/ds-audit [path]` | `dsguard run all` → all read-only reviewers + leakage + cleanup (plan only) in parallel → `audit-*.md` with suggested next agents |
 | `/ds-setup [gateway path]` | install check → `suggest-gateway` → validate on a real project and hook dry run → SQL Server tables via read-only `sys.*` queries → license split → model scan → per-repo pre-commit |
+| `/ds-start-day` (skill) | `dsguard day status` → show what's left → **ask available time** → plan to fit (20 % buffer, review time counted) in three buckets: needs you / Claude in session / unattended → `docs/journal/plans/<today>.md` → offer to start the non-you work |
+| `/ds-end-day` (skill) | `dsguard day status` → commit remaining work (one confirmation, `dsguard run commit --staged`) → **if Friday**: documenter comment pass on `week-files` → `verify-docs-only` → commit → `mark-review` → update Markdown files from the diff and fix broken links → tick plan, append story entry → draft next-workday plan → commit (push only if configured) |
 | `bin/ds-monitor <project>` | `drift_monitor.py --config monitor.toml`; on exit 1 runs `claude -p` with Read/Grep/Glob only and saves a triage note |
 | Headless | `claude -p "/ds-premerge origin/main"`; or the scripts alone in CI |
 
@@ -286,6 +291,15 @@ cron ─▶ ds-monitor ─▶ drift_monitor.py ─▶ OK/WATCH: exit 0, history 
                                                             cause: pipeline break | population shift | expected | noise
 ```
 
+**Daily rhythm**
+
+```
+morning  dsguard day status ─▶ remaining work ─▶ "how much time today?" ─▶ plan sized to it
+                                                      plans/<today>.md: needs you | Claude | unattended
+evening  commit work (gate) ─▶ [Fri: comment pass ─▶ verify-docs-only ─▶ commit ─▶ mark-review]
+         ─▶ Markdown run-through ─▶ STORY.md entry ─▶ plans/<next workday>.md ─▶ commit
+```
+
 **Reversible cleanup**
 
 ```
@@ -318,9 +332,14 @@ dsguard/core.py DEFAULTS  <  ~/.claude/dsguard.toml  <  [tool.dsguard] in pyproj
 ```
 ~/.claude/
   ds-toolkit -> <repo>/claude_ds_agents     symlink: `git pull` updates everything
-  agents/*.md, commands/*.md -> symlinks
+  agents/*.md, commands/*.md, skills/<name>/ -> symlinks
   settings.json                              PreToolUse hook entry (backed up on change)
   dsguard.toml                               your policy (copied once, then yours)
+
+<project>/docs/journal/                      committed: the project's memory
+  STORY.md                                   continuous story, one entry per working day
+  plans/YYYY-MM-DD.md                        daily plans (drafted at end of day, refined at start)
+  .last-comment-review                       commit where the last Friday comment pass ended
 
 <project>/.dsguard/                          self-ignoring (contains .gitignore "*")
   reports/      dsguard runs, premerge/audit reports
@@ -346,12 +365,13 @@ dsguard/core.py DEFAULTS  <  ~/.claude/dsguard.toml  <  [tool.dsguard] in pyproj
 
 ## 9. Testing
 
-`tests/` has 58 tests: 57 pass with sklearn, LightGBM and XGBoost installed, and the PyTorch
+`tests/` has 65 tests: 64 pass with sklearn, LightGBM and XGBoost installed, and the PyTorch
 test skips without torch. They cover:
 - every dsguard check, using planted positives and clean negatives;
 - verify-docs-only and the cleanup apply/restore round trip;
 - harness scripts on synthetic data with known planted problems (leaks, a weak segment, a missed non-linearity, drift, a volume drop);
 - real-framework round trips for the model loader;
+- the daybook: workday rollover, plan checkboxes, comment-only TODOs, next-step sections, link checks, the weekly-review marker;
 - a pickle built to run code when loaded, which `scan` must leave inert;
 - the facts verifier accepting rounded and percent forms and rejecting invented, uncited or dangling numbers.
 
@@ -376,8 +396,8 @@ isn't installed.
 ## 11. Known limitations
 
 - **Unverified paths.** The PyTorch loading path is implemented but untested here (PyTorch
-  downloads were blocked). No agent or command has yet been run end to end inside a live
-  Claude Code session.
+  downloads were blocked). No agent, command or skill has yet been run end to end inside a
+  live Claude Code session.
 - **Heuristics.** SQL rules are text heuristics, not a parser; the sql-reviewer agent and
   sqlfluff cover semantics. Static leakage rules follow variable names and call order, not
   data flow.

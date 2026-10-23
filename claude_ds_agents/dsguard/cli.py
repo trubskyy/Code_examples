@@ -8,7 +8,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from . import cleanup, code, docs, exposure, gateway, leakage, licenses, onboard, pysec, secrets, sql, vulns
+from . import cleanup, code, daybook, docs, exposure, gateway, leakage, licenses, onboard, pysec, secrets, sql, vulns
 from .core import SEVERITY_ORDER, CheckResult, build_context, ensure_state_dir, find_root
 
 CHECKS = {
@@ -124,6 +124,14 @@ def main(argv: list[str] | None = None) -> int:
     gw.add_argument("path", help="gateway package directory or .py file")
     gw.add_argument("--root", default=".")
     gw.set_defaults(func=lambda a: print(onboard.suggest(Path(a.path), find_root(Path(a.root)))) or 0)
+
+    day = sub.add_parser("day", help="facts for the start-of-day / end-of-day skills")
+    day.add_argument("action", choices=["status", "week-files", "md-check", "mark-review", "init"])
+    day.add_argument("--root", default=".")
+    day.add_argument("--format", choices=["text", "json"], default="text")
+    day.add_argument("--date", help="YYYY-MM-DD, default today")
+    day.add_argument("--since", help="md-check: date or ref (default today)")
+    day.set_defaults(func=daybook.main)
 
     apply = sub.add_parser("apply-cleanup", help="execute an approved cleanup plan (reversible)")
     apply.add_argument("plan")

@@ -53,3 +53,10 @@ keep = []
 
 [hooks]
 ask_on_recursive_rm = true
+
+[daybook]
+# Start-of-day / end-of-day skills. The journal (story + daily plans) is committed with the project.
+dir = "docs/journal"
+workdays = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+weekly_review_day = "Fri"   # end of day on this day adds the weekly comment pass
+push = false                # true: end-of-day pushes after committing

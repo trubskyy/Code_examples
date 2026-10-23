@@ -28,14 +28,15 @@ How the pieces fit is described in [ARCHITECTURE.md](ARCHITECTURE.md).
 | **Monitor** | Scheduled drift checks on deployed models; Claude is woken only on an ALERT, read-only, to triage it. | `drift-monitor`, `bin/ds-monitor` |
 | **Communicate** | Writes executive, product or peer summaries in which every number is cited and machine-verified against the source reports. | `stakeholder-writer`, `harness/facts.py` |
 | **Maintain** | Writes documentation, proven not to change code; proposes repository cleanup and applies it reversibly after your approval. | `documenter`, `cleanup-agent` |
+| **Daily rhythm** | Start of day: what's left, how much time you have, a plan split into *needs you* / *Claude in session* / *unattended*. End of day: commit, update the Markdown files, add to the project story, draft tomorrow's plan, commit. Fridays add a comment pass over the week's changed files. | `ds-start-day`, `ds-end-day`, `dsguard day` |
 
 ## Status
 
 | | |
 |---|---|
-| **Built** | 11 agents, 3 commands, 11 `dsguard` checks plus 4 tools, 6 harness scripts, the edit-time hook, the pre-commit hook, the scheduler wrapper, the installer |
-| **Verified** | 58 tests; 57 pass with sklearn, LightGBM and XGBoost installed, and PyTorch skips. CLI runs end to end on synthetic data; installer install/uninstall in a throwaway home; the hook against sample tool calls. |
-| **Not yet verified** | PyTorch model loading (implemented; PyTorch downloads were blocked in the build environment). Agents and commands haven't been run inside a live Claude Code session. |
+| **Built** | 11 agents, 3 commands, 2 skills (start/end of day), 11 `dsguard` checks plus 5 tools, 6 harness scripts, the edit-time hook, the pre-commit hook, the scheduler wrapper, the installer |
+| **Verified** | 65 tests; 64 pass with sklearn, LightGBM and XGBoost installed, and PyTorch skips. CLI runs end to end on synthetic data; installer install/uninstall in a throwaway home; the hook against sample tool calls. |
+| **Not yet verified** | PyTorch model loading (implemented; PyTorch downloads were blocked in the build environment). Agents, commands and skills haven't been run inside a live Claude Code session. |
 | **Waiting on the work machine** | Gateway adoption and SQL Server table list, both via `/ds-setup`. License policy (report-only until you set `block_families`). |
 | **Next** | `stats-reviewer` (A/B tests) and `team-pr-reviewer` (see the end of this file) |
 
@@ -83,6 +84,19 @@ reverses the install, and a `git pull` here updates every installed agent.
 
 "Scratch" means helper scripts and extracts go under `.dsguard/scratch/`, never into project code.
 
+## Daily skills
+
+| Skill | What it does |
+|---|---|
+| `/ds-start-day` | Reads yesterday's plan, carry-overs, TODOs, next steps in the docs, uncommitted work and open PRs. Asks **how much time you have today**, then plans to fit it: estimates, a 20 % buffer, your review time for Claude's work. Splits the plan into **Needs you**, **Claude, this session** and **Unattended**, saves it to `docs/journal/plans/<today>.md`, and offers to start the work that doesn't need you. |
+| `/ds-end-day` | Commits the remaining work (one confirmation, gated by `dsguard`). Updates the Markdown files that mention changed code and fixes broken links. Ticks today's plan, appends today's entry to **`docs/journal/STORY.md`**, drafts `plans/<next workday>.md`, and commits. Pushes only if `[daybook] push = true`. **On Fridays** it first runs a comment pass over every code file changed since the last review, proven behavior-neutral by `verify-docs-only`. |
+
+The journal lives in the project and is committed with it:
+- **`docs/journal/STORY.md`:** the continuous story of the project, one entry per working day, with a "Story so far" section refreshed weekly.
+- **`docs/journal/plans/`:** one plan per day.
+
+`dsguard day status` shows the facts both skills start from.
+
 ## Commands
 
 | Command | What it does |
@@ -120,6 +134,7 @@ reverses the install, and a `git pull` here updates every installed agent.
 ~/.claude/ds-toolkit/bin/dsguard run all --changed-since origin/main --format json
 ~/.claude/ds-toolkit/bin/dsguard verify-docs-only
 ~/.claude/ds-toolkit/bin/dsguard suggest-gateway path/to/gateway_client
+~/.claude/ds-toolkit/bin/dsguard day status                     # also: week-files | md-check | mark-review | init
 ~/.claude/ds-toolkit/bin/dsguard apply-cleanup .dsguard/cleanup-plan.json   # restore-cleanup <stamp> to undo
 ```
 
@@ -186,12 +201,13 @@ claude_ds_agents/
   README.md  ARCHITECTURE.md  install.py  dsguard.example.toml
   agents/      11 subagent definitions
   commands/    ds-setup, ds-premerge, ds-audit
-  dsguard/     deterministic engine (core, cli, 11 checks, onboarding)
+  skills/      ds-start-day, ds-end-day
+  dsguard/     deterministic engine (core, cli, 11 checks, onboarding, daybook)
   harness/     model_loader, model_diagnostics, leakage_check, llm_eval, drift_monitor, facts, common
   hooks/       pretooluse_guard.py (edit-time guard)
   git-hooks/   pre-commit
   bin/         dsguard launcher, ds-monitor scheduler wrapper
-  tests/       58 tests
+  tests/       65 tests
 ```
 
 ## Tests

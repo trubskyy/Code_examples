@@ -106,6 +106,14 @@ DEFAULTS: dict = {
     "docs": {"require_module_docstring": True, "min_public_coverage": 0.8},
     "cleanup": {"large_file_mb": 10, "entrypoints": [], "keep": []},
     "hooks": {"ask_on_recursive_rm": True},
+    "daybook": {
+        "dir": "docs/journal",
+        "workdays": ["Mon", "Tue", "Wed", "Thu", "Fri"],
+        "weekly_review_day": "Fri",
+        "push": False,
+        "code_extensions": [".py", ".ipynb", ".sql", ".R", ".r", ".sh", ".js", ".ts"],
+        "todo_markers": ["TODO", "FIXME", "XXX", "HACK"],
+    },
 }
 
 

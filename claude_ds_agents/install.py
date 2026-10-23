@@ -27,6 +27,7 @@ def links() -> list[tuple[Path, Path]]:
     pairs = [(TOOLKIT_LINK, HERE)]
     pairs += [(CLAUDE / "agents" / f.name, f) for f in sorted((HERE / "agents").glob("*.md"))]
     pairs += [(CLAUDE / "commands" / f.name, f) for f in sorted((HERE / "commands").glob("*.md"))]
+    pairs += [(CLAUDE / "skills" / d.name, d) for d in sorted((HERE / "skills").iterdir()) if (d / "SKILL.md").is_file()]
     return pairs
 
 
