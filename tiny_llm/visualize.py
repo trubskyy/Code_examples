@@ -15,10 +15,11 @@ One figure per prediction, with four views of the same forward pass:
 
 import matplotlib
 import numpy as np
-import torch
 from matplotlib import cm
 from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 from matplotlib.patches import FancyArrowPatch
+
+from model import softmax
 
 MAX_SHOWN = 14  # most recent characters drawn in the network diagram
 CMAP = matplotlib.colormaps["viridis"]
@@ -45,13 +46,15 @@ def draw_step(fig, model, tok, ctx_ids, probs, chosen_id, generated_so_far=""):
     chars = [show_char(c) for c in tok.decode(ctx_ids)]
 
     gs = GridSpec(2, 3, figure=fig, height_ratios=[2.1, 1], width_ratios=[2.4, 0.05, 1],
-                  hspace=0.32, wspace=0.12, left=0.04, right=0.98, top=0.9, bottom=0.06)
+                  hspace=0.32, wspace=0.12, left=0.04, right=0.98, top=0.87, bottom=0.06)
     prompt_txt = tok.decode(ctx_ids).replace("\n", " ")
-    fig.suptitle(f'Input: "…{prompt_txt[-70:]}"   →   next character: '
-                 f'"{show_char(tok.chars[chosen_id])}"  (p = {probs[chosen_id].item():.2f})',
-                 fontsize=13, fontweight="bold")
+    if len(prompt_txt) > 70:
+        prompt_txt = "…" + prompt_txt[-70:]
+    fig.suptitle(f'Input: "{prompt_txt}"   →   next character: '
+                 f'"{show_char(tok.chars[chosen_id])}"  (p = {probs[chosen_id]:.2f})',
+                 fontsize=13, fontweight="bold", y=0.985)
     if generated_so_far:
-        fig.text(0.5, 0.925, f'Generated so far: "{generated_so_far[-90:]}"'.replace("\n", " "),
+        fig.text(0.5, 0.935, f'Generated so far: "{generated_so_far[-90:]}"'.replace("\n", " "),
                  ha="center", fontsize=10, color="dimgray")
 
     _draw_network(fig.add_subplot(gs[0, 0]), tr, chars, shown, n_layer)
@@ -76,7 +79,7 @@ def _draw_network(ax, tr, chars, shown, n_layer):
 
     # Attention edges into block l+1 come from the residual stream after block l.
     for l in range(n_layer):
-        att = tr["attn"][l][0].mean(0).cpu().numpy()  # (T, T) averaged over heads
+        att = tr["attn"][l][0].mean(0)  # (T, T) averaged over heads
         x0, x1 = xs[l + 1], xs[l + 2]
         for i in shown:
             for j in shown:
@@ -90,7 +93,7 @@ def _draw_network(ax, tr, chars, shown, n_layer):
 
     # Nodes: vector norm of the residual stream at every position and layer.
     for c, res in enumerate(tr["residuals"]):
-        strength = _norm(res[0, shown].norm(dim=-1).cpu().numpy())
+        strength = _norm(np.linalg.norm(res[0, shown], axis=-1))
         for k, p in enumerate(shown):
             ax.scatter(xs[c + 1], ys[p], s=260, color=CMAP(0.15 + 0.85 * strength[k]),
                        edgecolor="black" if p == last else "white", linewidth=1.5 if p == last else 0.5,
@@ -116,7 +119,7 @@ def _draw_network(ax, tr, chars, shown, n_layer):
 
 
 def _draw_probs(ax, tok, probs, chosen_id, k=12):
-    p = probs.cpu().numpy()
+    p = probs
     top = np.argsort(p)[::-1][:k][::-1]
     colors = [ATTN_COLOR if i == chosen_id else "#4c72b0" for i in top]
     ax.barh(range(len(top)), p[top], color=colors)
@@ -129,8 +132,8 @@ def _draw_probs(ax, tok, probs, chosen_id, k=12):
 
 
 def _draw_attention_map(ax, att, chars, shown, l):
-    a = att.mean(0).cpu().numpy()[np.ix_(shown, shown)]
-    ax.imshow(a, cmap="Reds", vmin=0, vmax=1)
+    a = att.mean(0)[np.ix_(shown, shown)]
+    ax.imshow(a, cmap="Reds", vmin=0, vmax=a.max())
     labels = [chars[p] for p in shown]
     ax.set_xticks(range(len(shown)), labels, fontsize=7, family="monospace")
     ax.set_yticks(range(len(shown)), labels, fontsize=7, family="monospace")
@@ -139,9 +142,9 @@ def _draw_attention_map(ax, att, chars, shown, l):
 
 
 def _draw_mlp(ax, mlp):
-    acts = torch.stack([h[0, -1] for h in mlp]).cpu().numpy()  # (n_layer, 4C) for last char
-    lim = np.abs(acts).max() + 1e-9
-    ax.imshow(acts, aspect="auto", cmap="RdBu_r", vmin=-lim, vmax=lim, interpolation="nearest")
+    acts = np.stack([h[0, -1] for h in mlp])  # (n_layer, 4C) for the last character
+    acts = acts / (np.abs(acts).max(axis=1, keepdims=True) + 1e-9)  # each block on its own scale
+    ax.imshow(acts, aspect="auto", cmap="RdBu_r", vmin=-1, vmax=1, interpolation="nearest")
     ax.set_yticks(range(len(mlp)), [f"block {l + 1}" for l in range(len(mlp))], fontsize=8)
     ax.set_xlabel(f"{acts.shape[1]} MLP neurons", fontsize=8)
     ax.set_xticks([])
@@ -153,9 +156,8 @@ def _draw_logit_lens(ax, tok, layer_logits, k=3):
     names = ["embed"] + [f"block {l + 1}" for l in range(len(layer_logits) - 1)]
     rows = []
     for logits in layer_logits:
-        p = torch.softmax(logits[0, -1], -1)
-        vals, ids = torch.topk(p, k)
-        rows.append([f"'{show_char(tok.chars[i])}' {v:.2f}" for v, i in zip(vals.tolist(), ids.tolist())])
+        p = softmax(logits[0, -1])
+        rows.append([f"'{show_char(tok.chars[i])}' {p[i]:.2f}" for i in np.argsort(p)[::-1][:k]])
     table = ax.table(cellText=rows, rowLabels=names, colLabels=["1st", "2nd", "3rd"], loc="center",
                      cellLoc="center")
     table.auto_set_font_size(False)

@@ -19,9 +19,9 @@ import matplotlib
 if not os.environ.get("DISPLAY") and sys.platform.startswith("linux") and not os.environ.get("MPLBACKEND"):
     matplotlib.use("Agg")  # no screen (e.g. a server): save images instead of opening windows
 import matplotlib.pyplot as plt
-import torch
+import numpy as np
 
-from model import load_checkpoint, pick_device
+from model import load_checkpoint
 from visualize import draw_step
 
 
@@ -29,9 +29,8 @@ def has_screen():
     return matplotlib.get_backend().lower() != "agg"
 
 
-def answer(model, tok, prompt, args, device):
+def answer(model, tok, prompt, args):
     ids = tok.encode(prompt) or tok.encode("\n")
-    idx = torch.tensor([ids], device=device)
     visual = args.visualize or args.animate or args.gif
     fig = plt.figure(figsize=(18, 10)) if visual else None
     frames, generated = [], []
@@ -39,7 +38,7 @@ def answer(model, tok, prompt, args, device):
     def on_step(ctx_ids, probs, chosen):
         step = len(generated)
         if visual and (step == 0 or args.animate or args.gif):
-            draw_step(fig, model, tok, ctx_ids, probs, chosen, prompt + tok.decode(generated))
+            draw_step(fig, model, tok, ctx_ids, probs, chosen, tok.decode(generated))
             if step == 0:
                 fig.savefig(args.png, dpi=110)
             if args.gif:
@@ -51,9 +50,8 @@ def answer(model, tok, prompt, args, device):
         print(tok.chars[chosen], end="", flush=True)
 
     print(prompt, end="", flush=True)
-    if args.seed is not None:
-        torch.manual_seed(args.seed)
-    model.generate(idx, args.length, args.temperature, args.top_k, on_step=on_step)
+    rng = np.random.default_rng(args.seed)
+    model.generate(ids, args.length, args.temperature, args.top_k, rng, on_step=on_step)
     print()
 
     if visual:
@@ -86,22 +84,21 @@ def main():
     ap.add_argument("--gif", help="save an animated GIF of every generation step to this file")
     ap.add_argument("--png", default="network.png", help="where to save the picture")
     ap.add_argument("--delay", type=float, default=0.4, help="seconds per frame when animating")
-    ap.add_argument("--device", default=pick_device())
     args = ap.parse_args()
 
     if not os.path.exists(args.checkpoint):
         sys.exit(f"No {args.checkpoint} found. Train first:  python train.py books/*.txt")
-    model, tok, ckpt = load_checkpoint(args.checkpoint, args.device)
+    model, tok, ckpt = load_checkpoint(args.checkpoint)
     print(f"Loaded {model.num_params() / 1e6:.2f}M-parameter model (val loss {ckpt.get('val_loss', float('nan')):.3f})")
 
     if args.prompt is not None:
-        answer(model, tok, args.prompt, args, args.device)
+        answer(model, tok, args.prompt, args)
         return
     print("Type a prompt and press Enter (Ctrl+C to quit).")
     try:
         while True:
             prompt = input("\n> ")
-            answer(model, tok, prompt, args, args.device)
+            answer(model, tok, prompt, args)
     except (KeyboardInterrupt, EOFError):
         print()
 
