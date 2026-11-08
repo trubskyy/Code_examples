@@ -18,6 +18,8 @@ words, so it needs no tokenizer library.
 ## Run it
 
 ```bash
+python3 -m venv .venv                    # Ubuntu/Debian: first `sudo apt install python3-venv`
+source .venv/bin/activate                # run this in every new terminal
 pip install -r requirements.txt          # numpy, matplotlib, pillow
 
 python download_books.py                 # Alice in Wonderland, Sherlock Holmes, Pride and Prejudice
