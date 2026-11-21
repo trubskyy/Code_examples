@@ -30,6 +30,22 @@ if [ "$hook" = "pre-commit" ] && [ "${DSGUARD_SKIP:-0}" != "1" ] \
     fi
 fi
 
+# pre-push: when [review_loop] enforce_on_push is on, only commits approved by /ds-review-loop
+# may be pushed. `dsguard loop check-push` exits 0 straight away when enforcement is off.
+if [ "$hook" = "pre-push" ] && [ "${DSGUARD_SKIP:-0}" != "1" ] \
+   && [ "$(git config --bool ds.guard 2>/dev/null || echo true)" != "false" ]; then
+    dsguard="${DSGUARD_BIN:-$HOME/.claude/ds-toolkit/bin/dsguard}"
+    if [ -x "$dsguard" ]; then
+        "$dsguard" loop check-push
+        rc=$?
+        if [ "$rc" -eq 1 ]; then
+            exit 1
+        elif [ "$rc" -ne 0 ]; then
+            echo "dsguard: review-loop check could not run (exit $rc); push allowed" >&2
+        fi
+    fi
+fi
+
 hooks_dir="$(git rev-parse --git-common-dir 2>/dev/null)/hooks"
 if [ -x "$hooks_dir/$hook" ]; then
     exec "$hooks_dir/$hook" "$@"

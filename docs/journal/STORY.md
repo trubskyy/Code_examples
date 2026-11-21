@@ -158,3 +158,35 @@ repository of its own, since it is now infrastructure rather than an example.
 
 **Next:** run `/ds-end-day` at the end of the session, Friday edition, to exercise the full
 loop. Then install on the work machine (`install.py --git-hooks`, then `/ds-setup`).
+
+## 2026-11-21 (Sat)
+
+After the Windows install question (still open: the toolkit was never tested on Windows,
+and `python3`, links and cron need adapting), the user asked for an agentic review loop:
+every push reviewed by a better model, problems sent back to the original model, and the
+cycle repeated until they're solved.
+
+It was built in the toolkit's usual shape. The current session is the **author**, a fresh
+`pr-reviewer` subagent on a stronger model (Claude Fable by default) is the **reviewer**,
+and a script, `dsguard loop`, is the **referee**.
+
+The design avoids the obvious failure modes of letting two models talk:
+- **Independence.** The reviewer never sees the author's reasoning, only the code and the
+  author's replies, so it can't be talked into agreeing.
+- **Concrete findings.** Every blocker or major must have a failure scenario.
+- **Nothing dropped.** Each side must answer everything the other raised: the reviewer every
+  open finding and dispute, the author every blocking finding.
+- **The script decides when it's over.** It escalates to a person on stalemate, ping-pong
+  fixes, a dispute rejected twice, growing problem counts or the round limit.
+
+Running it inside Claude Code keeps it behind the company LLM gateway, and works in every
+project. An optional pre-push check makes "every push goes through review" enforceable
+rather than a habit.
+
+The tests found a real bug: a round with nothing blocking produced an empty answer list,
+which the referee read as "the author hasn't answered", so the loop would have stalled.
+
+**Next:** run `/ds-review-loop` on a real branch to tune the reviewer prompt; decide between
+Fable and Opus as the reviewer depending on what the work gateway offers; make the installer
+Windows-ready.
+

@@ -106,6 +106,16 @@ DEFAULTS: dict = {
     "docs": {"require_module_docstring": True, "min_public_coverage": 0.8},
     "cleanup": {"large_file_mb": 10, "entrypoints": [], "keep": []},
     "hooks": {"ask_on_recursive_rm": True},
+    "review_loop": {
+        "reviewer_model": "fable",        # Claude Code model alias for the reviewer subagent
+        "max_rounds": 4,
+        "block_on": ["blocker", "major"], # severities that must be resolved before DONE
+        "fix_minor": False,               # author also fixes minor/nit findings
+        "test_command": "",               # default: the daybook's detection (pytest / npm / make / R)
+        "post_to_pr": True,               # post the round report as a PR comment when a PR exists
+        "enforce_on_push": False,         # pre-push blocks commits the loop did not approve
+        "exempt_branches": [],
+    },
     "daybook": {
         "dir": "docs/journal",            # in-repo journal location (location = repo)
         "location": "ask",                # repo | home | ask (ask once per project, then remembered)

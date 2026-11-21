@@ -7,7 +7,9 @@ project is open; nothing about it is specific to one repository.
   agents judge the rest. Never overrule a dsguard `block`. Report checks that were skipped
   as not covered, never as passed.
 - **Before committing**, run `dsguard run commit --staged` unless the git hook already does.
-  **Before a PR**, offer `/ds-premerge`.
+  **Before pushing a branch for a PR**, offer `/ds-review-loop`: a stronger model reviews it,
+  you fix or dispute every finding, and the `dsguard loop` referee decides when it's done.
+  Never edit the loop state yourself or skip its gate. `/ds-premerge` gives a one-shot audit.
 - **LLM calls go through the company gateway** configured in `~/.claude/dsguard.toml`. Never
   add a direct provider SDK or endpoint.
 - **Pick the specialist agent**:

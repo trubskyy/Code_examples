@@ -9,7 +9,7 @@ setup is needed.
 
 | Installed once, in `~/.claude` | What it gives every project |
 |---|---|
-| Agents, commands, skills | The same specialists, `/ds-premerge`, `/ds-audit`, `/ds-start-day`, `/ds-end-day` everywhere |
+| Agents, commands, skills | The same specialists, `/ds-premerge`, `/ds-audit`, `/ds-review-loop`, `/ds-start-day`, `/ds-end-day` everywhere |
 | Managed block in `~/.claude/CLAUDE.md` | Claude knows, in any project, that the toolkit exists and when to use which part |
 | PreToolUse hook | Gateway bypasses and secrets blocked before Claude writes them, in any project |
 | Global git hooks (opt-in `--git-hooks`) | The commit gate in every repo on the machine; each repo's own hooks still run |
@@ -38,7 +38,7 @@ How the pieces fit is described in [ARCHITECTURE.md](ARCHITECTURE.md).
 | Job | What happens | Main pieces |
 |---|---|---|
 | **Guard** | Before Claude writes a file or runs a command, a hook blocks code that bypasses the company LLM gateway or contains secrets. Commits are gated the same way. Security reviews cover data/PII exposure, unsafe code, package licenses (*always free* vs *potential issues*, explained in plain English) and known vulnerabilities. | `hooks/`, `git-hooks/`, `security-auditor` |
-| **Review** | Finds bugs and inefficiencies in DS code and notebooks; correctness and cost problems in SQL (SQL Server by default); leakage in code and data; ranked refactoring proposals. | `code-reviewer`, `sql-reviewer`, `leakage-auditor`, `refactor-advisor` |
+| **Review** | A stronger model reviews every push in a loop with the author model until the findings are resolved (`/ds-review-loop`). Finds bugs and inefficiencies in DS code and notebooks; correctness and cost problems in SQL (SQL Server by default); leakage in code and data; ranked refactoring proposals. | `code-reviewer`, `sql-reviewer`, `leakage-auditor`, `refactor-advisor` |
 | **Analyze** | Loads models from sklearn, LightGBM, XGBoost or PyTorch (in code or as binaries) and diagnoses them: calibration, residual structure by feature, weak segments, drift over time, importance. Runs LLM evaluations through the gateway with regression diffs. | `model-diagnostics`, `llm-evaluator`, `harness/` |
 | **Monitor** | Scheduled drift checks on deployed models; Claude is woken only on an ALERT, read-only, to triage it. | `drift-monitor`, `bin/ds-monitor` |
 | **Communicate** | Writes executive, product or peer summaries in which every number is cited and machine-verified against the source reports. | `stakeholder-writer`, `harness/facts.py` |
@@ -49,8 +49,8 @@ How the pieces fit is described in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 | | |
 |---|---|
-| **Built** | 11 agents, 3 commands, 2 skills (start/end of day), 11 `dsguard` checks plus 5 tools, 6 harness scripts, the edit-time hook, the pre-commit hook, the scheduler wrapper, the installer |
-| **Verified** | 81 tests; 80 pass with sklearn, LightGBM and XGBoost installed, and PyTorch skips. CLI runs end to end on synthetic data; installer install/uninstall (CLAUDE.md block, global git hooks) in a throwaway home; the commit dispatcher in throwaway repos; the edit hook against sample tool calls. |
+| **Built** | 12 agents, 4 commands, 2 skills (start/end of day), 11 `dsguard` checks plus 6 tools (including the review-loop referee), 6 harness scripts, the edit-time hook, the pre-commit hook, the scheduler wrapper, the installer |
+| **Verified** | 94 tests. The 3 model-loader framework tests pass with sklearn, LightGBM and XGBoost installed and skip without them; PyTorch skips (unverified). CLI runs end to end on synthetic data; installer install/uninstall (CLAUDE.md block, global git hooks) in a throwaway home; the commit dispatcher in throwaway repos; the edit hook against sample tool calls. |
 | **Not yet verified** | PyTorch model loading (implemented; PyTorch downloads were blocked in the build environment). Agents, commands and skills haven't been run inside a live Claude Code session. |
 | **Waiting on the work machine** | Gateway adoption and SQL Server table list, both via `/ds-setup`. License policy (report-only until you set `block_families`). |
 | **Next** | `stats-reviewer` (A/B tests) and `team-pr-reviewer` (see the end of this file) |
@@ -104,6 +104,7 @@ reverses the install, and a `git pull` here updates every installed agent.
 | `documenter` | docs only | Docstrings, README, data dictionary; must pass `verify-docs-only` |
 | `cleanup-agent` | plan only | Verified cleanup plan; applies only after you approve; reversible |
 | `stakeholder-writer` | summaries | Audience-specific summaries; `facts.py verify` must pass |
+| `pr-reviewer` | nothing | The stronger-model reviewer in `/ds-review-loop`: strict JSON findings, verifies fixes, rules on disputes |
 
 "Scratch" means helper scripts and extracts go under `.dsguard/scratch/`, never into project code.
 
@@ -139,6 +140,7 @@ repository, any language, with or without git. The current folder decides the pr
 | `/ds-setup [gateway path]` | One-time adoption: install check → draft gateway config from the prewritten client (`dsguard suggest-gateway`) → validate it on a real project → SQL Server partitioned/large tables via read-only `sys.*` queries → license split → model scan → pre-commit links |
 | `/ds-premerge [base]` | `dsguard` on the diff, then the relevant reviewers in parallel, merged into one report: BLOCKED / FIX BEFORE MERGE / READY |
 | `/ds-audit [path]` | Whole-project review by all reviewers; cleanup in plan-only mode; suggests next agents |
+| `/ds-review-loop [base]` | Author/reviewer loop before a push: a stronger model reviews the branch, this session fixes or disputes every finding, and the `dsguard loop` referee loops until DONE or escalates to you; then pushes and updates the PR |
 
 ## Deterministic vs judgement, per concern
 
@@ -244,7 +246,7 @@ claude_ds_agents/
   claude/      CLAUDE-block.md (managed block for ~/.claude/CLAUDE.md)
   git-hooks/   pre-commit (per repo), global/ (machine-wide dispatcher + stubs for every hook)
   bin/         dsguard launcher, ds-monitor scheduler wrapper
-  tests/       81 tests
+  tests/       94 tests
 ```
 
 ## Tests
@@ -252,6 +254,48 @@ claude_ds_agents/
 ```bash
 python -m pytest -q claude_ds_agents/tests
 ```
+
+## Review loop: a stronger model reviews every push
+
+`/ds-review-loop` turns "write, push, hope" into a loop:
+- **Author**: the model your session runs on. Sonnet 5.5 is a good author.
+- **Reviewer**: a fresh `pr-reviewer` subagent on a stronger model (Claude Fable by default),
+  which reviews the branch's diff against its base.
+- **Referee**: `dsguard loop`, a script, decides when it's over.
+
+```
+gate (dsguard + tests green) ─▶ reviewer (fresh context: diff + earlier findings + author's replies)
+      ▲                              │ strict JSON findings
+      │                              ▼
+author fixes / disputes ◀── referee: CONTINUE │ DONE ─▶ push + PR comment │ ESCALATE ─▶ you decide
+```
+
+The referee enforces what neither model should decide:
+- **Gate first.** Every round starts with dsguard and the tests green, so no review is spent on
+  broken code.
+- **Findings must be concrete.** Every blocker or major needs a failure scenario. The reviewer
+  must resolve, re-report or rule on every earlier finding and every dispute.
+- **Every finding gets an answer.** The author must mark each blocking finding fixed, disputed
+  (with a reason) or deferred.
+- **Findings are tracked across rounds**: by id, or by a line-insensitive fingerprint when the
+  reviewer re-words them.
+- **DONE** when no blocker or major is open and the reviewer approves.
+- **ESCALATE to you** when any of these happens:
+  - the round limit is reached;
+  - there's no progress (the same blocking set as the previous round);
+  - a finding is fixed and comes back twice;
+  - a dispute is rejected twice;
+  - fixes keep adding problems;
+  - anything is deferred.
+
+The reviewer never sees the author's reasoning, only the code and the replies.
+
+Because the loop runs inside your Claude Code session, every call goes through whatever LLM
+gateway Claude Code uses at work. Settings are under `[review_loop]` in `dsguard.toml`:
+- `reviewer_model`: set it to `opus` if your gateway doesn't offer Fable;
+- `max_rounds`, `block_on`, `fix_minor`, `post_to_pr`;
+- `enforce_on_push`: with the global git hooks, the pre-push hook then blocks any commit the
+  loop hasn't approved, so every push goes through review. `DSGUARD_SKIP=1` bypasses it once.
 
 ## Next steps (recorded, not built)
 

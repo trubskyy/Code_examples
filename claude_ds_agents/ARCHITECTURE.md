@@ -240,6 +240,7 @@ same template: **run the script → judgement checklist → standard report**.
 |---|---|
 | `/ds-premerge [base]` | `dsguard run all --changed-since base` → choose reviewers from the diff (security always; code if .py/.ipynb changed; sql if SQL; leakage if training code; llm-evaluator only against an existing baseline) → run them in parallel → merge into `.dsguard/reports/premerge-*.md`. Verdict: any block = BLOCKED, any high = FIX BEFORE MERGE, else READY. |
 | `/ds-audit [path]` | `dsguard run all` → all read-only reviewers + leakage + cleanup (plan only) in parallel → `audit-*.md` with suggested next agents |
+| `/ds-review-loop [base]` | `dsguard loop start` → per round: `loop gate` (dsguard + tests) → `pr-reviewer` subagent on the reviewer model (`fable` by default) with only `loop brief` → `loop record-review` (validates, tracks findings, decides) → CONTINUE: the author fixes or disputes each blocking finding and runs `loop record-response`, then pushes the round → DONE: push, open or update the PR, post `loop report` → ESCALATE: stop and hand the decision to the user |
 | `/ds-setup [gateway path]` | install check → `suggest-gateway` → validate on a real project and hook dry run → SQL Server tables via read-only `sys.*` queries → license split → model scan → per-repo pre-commit |
 | `/ds-start-day` (skill, any project) | `dsguard day status` (outside a project: the cross-project list → pick one; first time in a project: choose repo or private journal) → show what's left → **ask available time** → plan to fit (20 % buffer, review time counted) in three buckets: needs you / Claude in session / unattended → `docs/journal/plans/<today>.md` → offer to start the non-you work |
 | `/ds-end-day` (skill, any project) | `dsguard day status` → commit remaining work (one confirmation, `dsguard run commit --staged`) → **if Friday**: documenter comment pass on `week-files` → `verify-docs-only` → commit → `mark-review` → update Markdown files from the diff and fix broken links → tick plan, append story entry → draft next-workday plan → commit the journal to the project (repo mode) or to `~/.claude/journal` (home mode); push only if configured |
@@ -310,6 +311,41 @@ evening  commit work (gate) ─▶ [Fri: comment pass ─▶ verify-docs-only �
          ─▶ Markdown run-through ─▶ STORY.md entry ─▶ plans/<next workday>.md ─▶ commit
 ```
 
+**Review loop (author ↔ stronger reviewer, refereed by a script)**
+
+```mermaid
+sequenceDiagram
+    participant A as Author (session model)
+    participant G as dsguard loop (referee)
+    participant R as pr-reviewer (stronger model, fresh context)
+    A->>G: start --base main
+    loop until DONE or ESCALATE
+        A->>G: gate (dsguard + tests must be green)
+        A->>G: brief
+        G-->>A: diff range, prior findings, author responses
+        A->>R: brief only (no author reasoning)
+        R-->>A: JSON findings / resolved_prior / dispute rulings
+        A->>G: record-review
+        G-->>A: CONTINUE · DONE · ESCALATE (+ reason)
+        A->>A: fix (commit + test) or dispute with reason
+        A->>G: record-response (every blocking finding answered)
+    end
+    A->>A: push, PR comment with loop report
+```
+
+Referee rules, all deterministic:
+- A blocker or major needs a failure scenario.
+- The reviewer must account for every open blocking finding and rule on every dispute.
+- The author must answer every blocking finding.
+- Findings are matched across rounds by id, or by a fingerprint (category, file and title
+  words, ignoring line numbers).
+- **DONE** means no blocking finding is open and the reviewer approves.
+- **ESCALATE** on any of: the round limit, no progress, a finding reopened twice, a dispute
+  rejected twice, the blocking count rising two rounds running, or deferred items.
+
+State lives in `.dsguard/loop/<branch>.json`. With `enforce_on_push`, the pre-push dispatcher
+calls `dsguard loop check-push`, which allows only the commit the loop approved.
+
 **Reversible cleanup**
 
 ```
@@ -376,18 +412,20 @@ dsguard/core.py DEFAULTS  <  ~/.claude/dsguard.toml  <  [tool.dsguard] in pyproj
 | Unpickling runs arbitrary code | `scan` never loads; loading a pickle needs explicit `--trust-pickle`; torch weights use `weights_only=True` |
 | Destructive actions | Read-only agents by default; cleanup via approved plan and trash; hook asks on `rm -r`; SQL agents limited to read-only and estimated plans |
 | Invented numbers | `facts.py verify` must pass before `render` |
+| A reviewer that rubber-stamps, or an author that games the reviewer | The reviewer runs in a fresh context on a stronger model and sees only the code and the replies; a script, not either model, decides DONE; ping-pong, stalemates and repeated disputes escalate to a person; merging stays a human decision |
 | Documentation edits change behavior | `verify-docs-only` compares docstring-free ASTs |
 | A missing tool looks like a pass | `skipped` status and "Not covered" sections |
 | A broken hook blocks work | Fails open; pre-commit and pre-merge run the same rules |
 
 ## 9. Testing
 
-`tests/` has 81 tests: 80 pass with sklearn, LightGBM and XGBoost installed, and the PyTorch
-test skips without torch. They cover:
+`tests/` has 94 tests. The model-loader framework tests pass with sklearn, LightGBM and
+XGBoost installed and skip without them; the PyTorch test skips without torch. They cover:
 - every dsguard check, using planted positives and clean negatives;
 - verify-docs-only and the cleanup apply/restore round trip;
 - harness scripts on synthetic data with known planted problems (leaks, a weak segment, a missed non-linearity, drift, a volume drop);
 - real-framework round trips for the model loader;
+- the review-loop referee: convergence to DONE, every escalation rule, input validation for both models, the gate, push enforcement through the real pre-push hook;
 - machine-wide use: the git hook dispatcher in throwaway repos (blocks secrets, chains the repo's own hooks, honours opt-outs, never blocks when the toolkit is missing), installer round trips for the CLAUDE.md block and global hooks (never overriding an existing `core.hooksPath`), the cross-project registry;
 - the daybook: workday rollover, plan checkboxes, comment-only TODOs, next-step sections, link checks, the weekly-review marker, repo vs private journals, the cross-project registry, non-git projects, test detection for pytest/npm/make/R;
 - a pickle built to run code when loaded, which `scan` must leave inert;

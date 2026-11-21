@@ -8,7 +8,7 @@ import sys
 from datetime import date, datetime
 from pathlib import Path
 
-from . import cleanup, code, daybook, docs, exposure, gateway, leakage, licenses, onboard, pysec, secrets, sql, vulns
+from . import cleanup, code, daybook, docs, reviewloop, exposure, gateway, leakage, licenses, onboard, pysec, secrets, sql, vulns
 from .core import SEVERITY_ORDER, CheckResult, build_context, ensure_state_dir, find_root
 
 CHECKS = {
@@ -145,6 +145,16 @@ def main(argv: list[str] | None = None) -> int:
     proj.add_argument("--root", default=".")
     proj.add_argument("--format", choices=["text", "json"], default="text")
     proj.set_defaults(func=lambda a: daybook.main(argparse.Namespace(root=a.root, action="projects", format=a.format, date=None)))
+
+    loop = sub.add_parser("loop", help="review loop referee: author model <-> stronger reviewer model")
+    loop.add_argument("action", choices=["start", "gate", "brief", "record-review", "record-response",
+                                         "status", "report", "check-push"])
+    loop.add_argument("file", nargs="?", help="JSON file for record-review / record-response")
+    loop.add_argument("--root", default=".")
+    loop.add_argument("--base", help="start: the PR's base ref (default origin/main)")
+    loop.add_argument("--max-rounds", type=int)
+    loop.add_argument("--restart", action="store_true", help="start: archive the current loop and begin again")
+    loop.set_defaults(func=reviewloop.main)
 
     apply = sub.add_parser("apply-cleanup", help="execute an approved cleanup plan (reversible)")
     apply.add_argument("plan")

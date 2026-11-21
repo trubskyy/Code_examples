@@ -54,6 +54,16 @@ keep = []
 [hooks]
 ask_on_recursive_rm = true
 
+[review_loop]
+# /ds-review-loop: your session is the author; a stronger model reviews; dsguard referees.
+reviewer_model = "fable"    # Claude Code alias: fable | opus | sonnet. Use what your gateway offers
+max_rounds = 4
+block_on = ["blocker", "major"]
+fix_minor = false           # true: the author also fixes minor/nit findings
+post_to_pr = true           # post the loop report as a PR comment
+enforce_on_push = false     # true (with --git-hooks): pre-push blocks commits the loop did not approve
+exempt_branches = []
+
 [daybook]
 # Start-of-day / end-of-day skills. They work in every project; settings here apply to all of
 # them, and a project's own dsguard.toml can override any key (e.g. push, test_command).
