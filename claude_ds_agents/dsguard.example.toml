@@ -26,7 +26,7 @@ pii_email_allow_domains = ["example.com"]
 # network-copyleft, restricted. Nothing fails until a policy exists; then list families here, e.g.
 # block_families = ["network-copyleft", "restricted"]
 block_families = []
-python = ""                 # project interpreter; default: .venv/bin/python, venv/bin/python
+python = ""                 # absolute path; only honored in ~/.claude/dsguard.toml. Default: read .venv/venv metadata
 [licenses.exceptions]
 # "some-package" = "approved by legal 2026-03, ticket LEGAL-123"
 

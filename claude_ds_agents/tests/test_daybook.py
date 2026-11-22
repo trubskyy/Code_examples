@@ -11,6 +11,7 @@ TOOLKIT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(TOOLKIT))
 
 from dsguard import daybook  # noqa: E402
+from dsguard import core  # noqa: E402
 from dsguard.core import DEFAULTS  # noqa: E402
 
 CFG = DEFAULTS["daybook"]
@@ -101,7 +102,7 @@ def test_week_files_use_marker_after_review(tmp_path):
 
 def _isolated(root, home):
     """Point the journal home (registry, private journals) at a temp dir, never the real ~/.claude."""
-    (root / "dsguard.toml").write_text(f'[daybook]\nhome_dir = "{home}"\n')
+    core.USER_CONFIG.write_text(f'[daybook]\nhome_dir = "{home}"\n')  # user-only key; see conftest
     return CFG | {"home_dir": str(home)}
 
 

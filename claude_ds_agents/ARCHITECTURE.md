@@ -376,7 +376,7 @@ dsguard/core.py DEFAULTS  <  ~/.claude/dsguard.toml  <  [tool.dsguard] in pyproj
 |---|---|---|
 | `[llm_gateway]` | mode (`ban` / `require_gateway_base_url`), allowed and banned hosts, banned imports, exempt paths, key env vars | `/ds-setup` + `suggest-gateway` |
 | `[secrets]`, `[exposure]` | allow-lists, data paths, PII domains | defaults |
-| `[licenses]` | `block_families` (empty = report only), `exceptions`, project interpreter | your policy when known |
+| `[licenses]` | `block_families` (empty = report only), `exceptions`, interpreter (user config only) | your policy when known |
 | `[sql]` | `dialect = "tsql"`, `partitioned_tables` (table → filter column) | `/ds-setup` |
 | `[code]`, `[docs]`, `[cleanup]`, `[hooks]` | thresholds and toggles | defaults |
 
@@ -424,6 +424,7 @@ dsguard/core.py DEFAULTS  <  ~/.claude/dsguard.toml  <  [tool.dsguard] in pyproj
 | A reviewer that rubber-stamps, or an author that games the reviewer | The reviewer runs in a fresh context on a stronger model and sees only the code and the replies; a script, not either model, decides DONE; ping-pong, stalemates and repeated disputes escalate to a person; merging stays a human decision |
 | Documentation edits change behavior | `verify-docs-only` compares docstring-free ASTs |
 | A missing tool looks like a pass | `skipped` status and "Not covered" sections |
+| Checking an untrusted repo runs its code | `dsguard run` executes nothing from the project: venv metadata is read, pip-audit gets only pins, sqlfluff gets no project config or templating; `licenses.python` and `daybook.home_dir` are user-config only; state is never written through symlinks |
 | A broken hook blocks work | Fails open with a visible warning that nothing is being checked |
 
 ## 9. Testing

@@ -9,7 +9,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from . import cleanup, code, daybook, docs, reviewloop, exposure, gateway, leakage, licenses, onboard, pysec, secrets, sql, vulns
-from .core import BLOCKED_EXIT, SEVERITY_ORDER, CheckResult, build_context, ensure_state_dir, find_root
+from .core import BLOCKED_EXIT, SEVERITY_ORDER, CheckResult, UnsafeStateDir, build_context, ensure_state_dir, find_root
 
 CHECKS = {
     "gateway": gateway.run, "secrets": secrets.run, "exposure": exposure.run, "pysec": pysec.run,
@@ -82,7 +82,12 @@ def cmd_run(args) -> int:
         "root": str(root), "scope": args.changed_since or ("staged" if args.staged else "all"),
         "files_in_scope": len(ctx.files), "blocked": blocked, "results": [r.to_dict() for r in results],
     }
-    saved = None if args.no_save else _save(root, payload)
+    saved = None
+    if not args.no_save:
+        try:
+            saved = _save(root, payload)
+        except UnsafeStateDir as exc:
+            print(f"dsguard: report not saved: {exc}", file=sys.stderr)
     counts = {s: sum(f.severity == s for r in results for f in r.findings) for s in SEVERITY_ORDER}
     verdict = "BLOCKED" if counts["block"] else "WARNINGS" if counts["warn"] else "OK"
     try:

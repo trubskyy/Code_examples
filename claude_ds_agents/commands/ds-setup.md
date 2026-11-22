@@ -66,7 +66,7 @@ names exactly as queries write them (e.g. `dbo.FactSales`).
 ## 4. Licenses
 
 Run `~/.claude/ds-toolkit/bin/dsguard run licenses --root <project>` with that project's venv
-active, or set `[licenses] python`. Show the split: *always free* vs *potential issues*, with
+active, or set `[licenses] python` (absolute path) in `~/.claude/dsguard.toml`; project config can't set it. Show the split: *always free* vs *potential issues*, with
 the plain-English obligation for each family. Leave `block_families` empty unless the user has
 a company policy. Record any packages legal has approved under `[licenses.exceptions]`, with
 the reason.

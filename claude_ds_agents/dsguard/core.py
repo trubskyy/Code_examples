@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import copy
 import json
+import os
 import re
 import subprocess
 import tomllib
@@ -133,6 +134,19 @@ DEFAULTS: dict = {
 }
 
 
+# Only ~/.claude/dsguard.toml may set these: they name a program to run or a place to write
+# outside the project, and a project's own config comes with whatever repository was cloned.
+USER_ONLY = {"licenses": ("python",), "daybook": ("home_dir",)}
+
+
+def _project_layer(layer: dict) -> dict:
+    out = dict(layer)
+    for section, keys in USER_ONLY.items():
+        if isinstance(layer.get(section), dict):
+            out[section] = {k: v for k, v in layer[section].items() if k not in keys}
+    return out
+
+
 def _deep_merge(base: dict, override: dict) -> dict:
     for key, value in override.items():
         if isinstance(value, dict) and isinstance(base.get(key), dict):
@@ -143,7 +157,9 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 
 def load_config(root: Path) -> dict:
-    """Defaults < ~/.claude/dsguard.toml < [tool.dsguard] in pyproject < ./dsguard.toml."""
+    """Defaults < ~/.claude/dsguard.toml < [tool.dsguard] in pyproject < ./dsguard.toml.
+
+    The two project layers can't set the USER_ONLY keys."""
     config = copy.deepcopy(DEFAULTS)
     if USER_CONFIG.is_file():
         _deep_merge(config, tomllib.loads(USER_CONFIG.read_text()))
@@ -153,10 +169,10 @@ def load_config(root: Path) -> dict:
             tool = tomllib.loads(pyproject.read_text()).get("tool", {})
         except tomllib.TOMLDecodeError:
             tool = {}
-        _deep_merge(config, tool.get("dsguard", {}))
+        _deep_merge(config, _project_layer(tool.get("dsguard", {})))
     local = root / "dsguard.toml"
     if local.is_file():
-        _deep_merge(config, tomllib.loads(local.read_text()))
+        _deep_merge(config, _project_layer(tomllib.loads(local.read_text())))
     return config
 
 
@@ -222,8 +238,22 @@ def staged_files(root: Path) -> set[str]:
     return set(_split_z(git(root, "diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR") or ""))
 
 
+class UnsafeStateDir(RuntimeError):
+    """.dsguard contains a symlink, so writing state could write anywhere."""
+
+
 def ensure_state_dir(root: Path) -> Path:
     state = root / STATE_DIR
+    # A cloned repo can ship .dsguard with links to files in the user's home. trash/ is exempt
+    # below its top: apply-cleanup may have moved a project's own links there.
+    if state.is_symlink():
+        raise UnsafeStateDir(f"{state} is a symlink; refusing to write through it")
+    for folder, dirs, files in os.walk(state):
+        for name in dirs + files:
+            if os.path.islink(os.path.join(folder, name)):
+                raise UnsafeStateDir(f"{os.path.join(folder, name)} is a symlink; refusing to write through it")
+        if Path(folder) == state / "trash":
+            dirs.clear()
     state.mkdir(exist_ok=True)
     ignore = state / ".gitignore"
     if not ignore.exists():

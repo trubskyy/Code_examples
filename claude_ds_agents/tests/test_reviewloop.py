@@ -25,7 +25,7 @@ def repo(tmp_path):
     root.mkdir()
     git(root, "init", "-q", "-b", "main")
     (root / "app.py").write_text("def f(x):\n    return x\n")
-    (root / "dsguard.toml").write_text(f'[review_loop]\ntest_command = "true"\n[daybook]\nhome_dir = "{tmp_path}/jhome"\n')
+    (root / "dsguard.toml").write_text('[review_loop]\ntest_command = "true"\n')
     git(root, "add", "-A")
     git(root, "commit", "-qm", "base")
     git(root, "checkout", "-qb", "feature")
