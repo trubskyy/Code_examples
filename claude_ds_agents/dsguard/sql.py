@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 
 from .core import CheckResult, Context, call_name, cell_text, notebook_cells, python_sources
 
@@ -245,8 +247,22 @@ def _sqlfluff(ctx: Context, files: list[str], result: CheckResult) -> None:
     if not files:
         return
     cfg = ctx.config["sql"]
-    proc = subprocess.run([exe, "lint", "--dialect", cfg["dialect"], "--format", "json", "--nofail",
-                           *[str(ctx.root / f) for f in files]], capture_output=True, text=True, check=False)
+    # sqlfluff config, in files or in `-- sqlfluff:` comments, can load the project's Python.
+    # So lint copies outside the project, with directives defused and no templating.
+    with tempfile.TemporaryDirectory() as tmp:
+        originals = {}
+        for index, rel in enumerate(files):
+            text = ctx.read(rel)
+            if text is not None:
+                copy = os.path.join(tmp, f"{index}.sql")
+                with open(copy, "w", encoding="utf-8") as fh:
+                    fh.write(re.sub("sqlfluff", "sql_fluff", text, flags=re.I))
+                originals[copy] = rel
+        if not originals:
+            return
+        proc = subprocess.run([exe, "lint", "--ignore-local-config", "--templater", "raw", "--dialect", cfg["dialect"],
+                               "--format", "json", "--nofail", *originals],
+                              capture_output=True, text=True, check=False, cwd=tmp)
     try:
         reports = json.loads(proc.stdout)
     except ValueError:
@@ -254,7 +270,7 @@ def _sqlfluff(ctx: Context, files: list[str], result: CheckResult) -> None:
         return
     skip = tuple(cfg["sqlfluff_exclude_prefixes"])
     for report in reports:
-        rel = report["filepath"].removeprefix(str(ctx.root) + "/")
+        rel = originals.get(report["filepath"], report["filepath"])
         for v in report.get("violations", []):
             code = v.get("code", "")
             if code.startswith(skip) or code == "PRS":

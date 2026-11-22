@@ -5,11 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
-from . import cleanup, code, docs, exposure, gateway, leakage, licenses, onboard, pysec, secrets, sql, vulns
-from .core import SEVERITY_ORDER, CheckResult, build_context, ensure_state_dir, find_root
+from . import cleanup, code, daybook, docs, reviewloop, exposure, gateway, leakage, licenses, onboard, pysec, secrets, sql, vulns
+from .core import BLOCKED_EXIT, SEVERITY_ORDER, CheckResult, UnsafeStateDir, build_context, ensure_state_dir, find_root
 
 CHECKS = {
     "gateway": gateway.run, "secrets": secrets.run, "exposure": exposure.run, "pysec": pysec.run,
@@ -82,14 +82,33 @@ def cmd_run(args) -> int:
         "root": str(root), "scope": args.changed_since or ("staged" if args.staged else "all"),
         "files_in_scope": len(ctx.files), "blocked": blocked, "results": [r.to_dict() for r in results],
     }
-    saved = None if args.no_save else _save(root, payload)
+    saved = None
+    if not args.no_save:
+        try:
+            saved = _save(root, payload)
+        except UnsafeStateDir as exc:
+            print(f"dsguard: report not saved: {exc}", file=sys.stderr)
+    counts = {s: sum(f.severity == s for r in results for f in r.findings) for s in SEVERITY_ORDER}
+    verdict = "BLOCKED" if counts["block"] else "WARNINGS" if counts["warn"] else "OK"
+    try:
+        journal, mode = daybook.resolve_journal(root, ctx.config["daybook"])
+        known = {"mode": mode, "journal": str(journal)} if journal else {}
+        daybook.touch(root, ctx.config["daybook"], date.today(), **known,
+                      dsguard={"date": date.today().isoformat(), "verdict": verdict, "checks": ",".join(r.name for r in results),
+                               "scope": payload["scope"], **counts})
+    except Exception as exc:  # bookkeeping must not change the verdict
+        print(f"dsguard: project registry not updated ({type(exc).__name__}: {exc})", file=sys.stderr)
     if args.format == "json":
         print(json.dumps(payload, indent=2))
     else:
         print(render_text(results, args.limit))
         if saved:
             print(f"\nfull report: {saved}")
-    return 1 if blocked else 0
+    if blocked:
+        return BLOCKED_EXIT if args.hook else 1
+    if args.hook and any(r.status == "error" for r in results):
+        return 3  # not BLOCKED_EXIT: the hooks allow it and warn that it went unchecked
+    return 0
 
 
 def cmd_verify_docs(args) -> int:
@@ -100,6 +119,9 @@ def cmd_verify_docs(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="backslashreplace")  # printing an odd file name must not crash a gate
     parser = argparse.ArgumentParser(prog="dsguard", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -113,6 +135,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--format", choices=["text", "json"], default="text")
     run.add_argument("--limit", type=int, default=40, help="max findings per check in text output")
     run.add_argument("--no-save", action="store_true", help="do not write .dsguard/reports")
+    run.add_argument("--hook", action="store_true", help=f"exit {BLOCKED_EXIT} (not 1) when blocked, for git hooks")
     run.set_defaults(func=cmd_run)
 
     verify = sub.add_parser("verify-docs-only", help="fail if edits since REF changed code, not just docs")
@@ -124,6 +147,30 @@ def main(argv: list[str] | None = None) -> int:
     gw.add_argument("path", help="gateway package directory or .py file")
     gw.add_argument("--root", default=".")
     gw.set_defaults(func=lambda a: print(onboard.suggest(Path(a.path), find_root(Path(a.root)))) or 0)
+
+    day = sub.add_parser("day", help="facts for the start-of-day / end-of-day skills")
+    day.add_argument("action", choices=["status", "projects", "week-files", "md-check", "mark-review", "init"])
+    day.add_argument("--location", choices=["repo", "home"], help="init: where this project's journal lives")
+    day.add_argument("--root", default=".")
+    day.add_argument("--format", choices=["text", "json"], default="text")
+    day.add_argument("--date", help="YYYY-MM-DD, default today")
+    day.add_argument("--since", help="md-check: date or ref (default today)")
+    day.set_defaults(func=daybook.main)
+
+    proj = sub.add_parser("projects", help="every project the toolkit has touched, with journal and check status")
+    proj.add_argument("--root", default=".")
+    proj.add_argument("--format", choices=["text", "json"], default="text")
+    proj.set_defaults(func=lambda a: daybook.main(argparse.Namespace(root=a.root, action="projects", format=a.format, date=None)))
+
+    loop = sub.add_parser("loop", help="review loop referee: author model <-> stronger reviewer model")
+    loop.add_argument("action", choices=["start", "gate", "brief", "record-review", "record-response",
+                                         "status", "report", "check-push", "restart"])
+    loop.add_argument("file", nargs="?", help="JSON file for record-review / record-response")
+    loop.add_argument("--root", default=".")
+    loop.add_argument("--base", help="start: the PR's base ref (default origin/main)")
+    loop.add_argument("--max-rounds", type=int)
+    loop.add_argument("--refs-stdin", action="store_true", help="check-push: judge the refs git gives pre-push on stdin")
+    loop.set_defaults(func=reviewloop.main)
 
     apply = sub.add_parser("apply-cleanup", help="execute an approved cleanup plan (reversible)")
     apply.add_argument("plan")

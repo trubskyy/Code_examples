@@ -11,11 +11,18 @@ projects. It runs in Claude Code on the lead's own machine and covers six jobs:
 | Job | Examples |
 |---|---|
 | **Guard** | Nothing bypasses the LLM gateway, no secrets or customer data leak, no license surprises |
-| **Review** | Code, SQL, leakage, refactoring opportunities, before merge or on demand |
+| **Review** | Code, SQL, leakage, refactoring opportunities, before merge or on demand; an author/reviewer loop in which a stronger model reviews every push until the findings are resolved |
 | **Analyze** | Model diagnostics, data leakage checks, LLM evaluations |
 | **Monitor** | Scheduled drift checks on deployed models |
 | **Communicate** | Stakeholder summaries whose numbers are machine-verified |
 | **Maintain** | Documentation and repository cleanup, done safely |
+| **Daily rhythm** | Start-of-day plan sized to your time; end-of-day commit, docs, story and next plan; Friday comment pass |
+
+**Scope: every project on the machine.** Nothing is installed per repository. Agents,
+commands, skills, the Claude hook, the CLAUDE.md block, the policy file and (opt-in) the
+global git hooks all live in `~/.claude` or the user's git config. They act on whatever project
+Claude Code or git is running in. Projects contribute only an optional `dsguard.toml`, a
+self-ignoring `.dsguard/` folder, and their journal.
 
 ## 2. Design principles
 
@@ -27,7 +34,8 @@ projects. It runs in Claude Code on the lead's own machine and covers six jobs:
    "Not covered" section.
 3. **Skipped is never passed.** A missing external tool (gitleaks, pip-audit, sqlfluff, bandit)
    is reported as skipped or not covered, never as clean.
-4. **Least privilege by default.** Four of the eleven agents are strictly read-only. The rest
+4. **Least privilege by default.** Five of the twelve agents are strictly read-only (the four
+   reviewers and `pr-reviewer`). The rest
    write only to docs, `.dsguard/` scratch and reports, eval files or monitoring config, never to
    pipeline or model code. Where they write, their output is verified (documenter →
    `verify-docs-only`, stakeholder-writer → `facts.py verify`, cleanup → your approval and a
@@ -67,11 +75,12 @@ flowchart TB
         A9[documenter]
         A10[cleanup-agent]
         A11[stakeholder-writer]
+        A12[pr-reviewer<br/>stronger model]:::ro
     end
 
     subgraph Engine["Layer 2: dsguard (deterministic, stdlib)"]
         CHK[checks: gateway · secrets · exposure · pysec · licenses · vulns<br/>sql · code · leakage · docs · cleanup]
-        TOOLS[verify-docs-only · apply/restore-cleanup · suggest-gateway]
+        TOOLS[verify-docs-only · apply/restore-cleanup · suggest-gateway<br/>day / projects · loop referee]
     end
 
     subgraph Harness["Layer 3: harness/ (deterministic, numpy+pandas)"]
@@ -125,10 +134,12 @@ The same picture as text:
 | Component | Trigger | Decision |
 |---|---|---|
 | `hooks/pretooluse_guard.py` | Claude Code `PreToolUse` on `Write\|Edit\|MultiEdit\|NotebookEdit\|Bash` | **deny**: new content imports a provider SDK, references a provider host, or contains a high-confidence secret; a Bash command calls a provider host. **ask**: recursive `rm`. Otherwise silent. |
-| `git-hooks/pre-commit` | `git commit` | `dsguard run commit --staged`: gateway and secrets on staged files; a block fails the commit |
+| `git-hooks/global/` (opt-in, `install.py --git-hooks`) | any git hook in **any repo**, via global `core.hooksPath` | `_dispatch`: on pre-commit, `dsguard run commit --staged` (only exit code 10, a real block, fails the commit; a missing or broken toolkit warns); on pre-push, `dsguard loop check-push --refs-stdin` (judges every ref being pushed; blocks only when `enforce_on_push` is on); then it **always runs the repo's own `.git/hooks/<name>`**, so pre-commit framework, Git LFS and custom hooks keep working. Opt-outs: `git config ds.guard false`, `DSGUARD_SKIP=1`. Server hooks are forwarded too; without a repo hook, `push-to-checkout` reproduces git's default and `proc-receive` fails. Never installed over a `core.hooksPath` from system or global config or their includes. |
+| `git-hooks/pre-commit` | `git commit` in a repo it's linked into | Same gate, per repo, for machines where the global setting is taken |
+| `claude/CLAUDE-block.md` | every Claude Code session | Installed as a marked block in `~/.claude/CLAUDE.md`: tells Claude in any project that the toolkit exists, which agent fits which job, to gate commits, and to read the project's story |
 
-The hook **fails open**: an internal error lets the edit through, with a message on stderr. A
-broken hook must not stop work. The pre-commit hook and `/ds-premerge` run the same rules as
+The hook **fails open**: an internal error lets the edit through, and shows you a warning
+(`systemMessage`) that nothing is being checked. A broken hook must not stop work. The pre-commit hook and `/ds-premerge` run the same rules as
 the backstop. Both use the same functions as the full checks
 (`gateway.scan_python_tree`, `secrets.scan_text`), so the rules can't diverge.
 
@@ -138,7 +149,7 @@ the backstop. Both use the same functions as the full checks
 dsguard/
   core.py      config loading and merging, file discovery (git-aware), Finding/CheckResult,
                Context (cached reads), Python and notebook source iteration, AST helpers
-  cli.py       `run` / `verify-docs-only` / `suggest-gateway` / `apply-cleanup` / `restore-cleanup`
+  cli.py       `run` / `verify-docs-only` / `suggest-gateway` / `day` / `projects` / `loop` / `apply-cleanup` / `restore-cleanup`
   gateway.py   provider imports, hosts, key env vars, client base_url (ban or require mode)
   secrets.py   token patterns, entropy-checked assignments, credential files, gitleaks
   exposure.py  data/model files in git, notebook outputs, PII (email/SSN/Luhn cards), network binds
@@ -151,6 +162,12 @@ dsguard/
   docs.py      docstring coverage, stale params, README; verify_docs_only (docstring-free AST diff)
   cleanup.py   junk, suspect names, orphan modules; reversible apply/restore
   onboard.py   reads a prewritten gateway client and drafts [llm_gateway] config
+  reviewloop.py the review-loop referee: gate, reviewer-JSON validation, cross-round finding
+               tracking, CONTINUE/DONE/ESCALATE decisions, report, pre-push check
+  daybook.py   facts for the daily skills, in any project: workdays and next workday, open plan
+               items, TODO comments, next-step sections, today's and this week's changed files
+               (git, or file times without git), Markdown link check, test-command detection;
+               per-project journal location (repo or private home) and the cross-project registry
 ```
 
 **Check contract.** Each check is `run(ctx: Context) -> CheckResult`, registered in
@@ -163,7 +180,7 @@ Finding     { rule, severity: block|warn|info, path, message, line?, cell? }
 
 | Severity | Meaning | Who may override |
 |---|---|---|
-| `block` | Policy violation or leak; exit code 1 | Nobody in-session. Fix it, or change config deliberately. |
+| `block` | Policy violation or leak; exit code 1 (10 with `--hook`, for git hooks) | Nobody in-session. Fix it, or change config deliberately. |
 | `warn` | Likely problem | Agent judgement, with a reason |
 | `info` | Context or a lead | Agent judgement |
 
@@ -216,6 +233,7 @@ same template: **run the script → judgement checklist → standard report**.
 | llm-evaluator | + Edit, Write | eval sets and adapters | `dsguard run gateway`, `llm_eval.py` |
 | drift-monitor | + Write | `monitor.toml`, `monitoring/*.sql` | `drift_monitor.py` |
 | stakeholder-writer | + Write | `.dsguard/summaries/` | `facts.py collect/verify/render` |
+| pr-reviewer | Bash, Read, Grep, Glob (stronger model, set per run) | nothing | `dsguard loop brief`; its JSON is validated by `dsguard loop record-review` |
 
 **Report contract** (so orchestrators can merge reports): a `## <agent>` header, a
 `Verdict:` line, a findings table with severity and location, then "Needs verification" or
@@ -227,7 +245,10 @@ same template: **run the script → judgement checklist → standard report**.
 |---|---|
 | `/ds-premerge [base]` | `dsguard run all --changed-since base` → choose reviewers from the diff (security always; code if .py/.ipynb changed; sql if SQL; leakage if training code; llm-evaluator only against an existing baseline) → run them in parallel → merge into `.dsguard/reports/premerge-*.md`. Verdict: any block = BLOCKED, any high = FIX BEFORE MERGE, else READY. |
 | `/ds-audit [path]` | `dsguard run all` → all read-only reviewers + leakage + cleanup (plan only) in parallel → `audit-*.md` with suggested next agents |
+| `/ds-review-loop [base]` | `dsguard loop start` → per round: `loop gate` (dsguard + tests) → `pr-reviewer` subagent on the reviewer model (`fable` by default) with only `loop brief` → `loop record-review` (validates, tracks findings, decides) → CONTINUE: the author fixes or disputes each blocking finding and runs `loop record-response` (no push yet) → DONE: push, open or update the PR, post `loop report` → ESCALATE: stop and hand the decision to the user |
 | `/ds-setup [gateway path]` | install check → `suggest-gateway` → validate on a real project and hook dry run → SQL Server tables via read-only `sys.*` queries → license split → model scan → per-repo pre-commit |
+| `/ds-start-day` (skill, any project) | `dsguard day status` (outside a project: the cross-project list → pick one; first time in a project: choose repo or private journal) → show what's left → **ask available time** → plan to fit (20 % buffer, review time counted) in three buckets: needs you / Claude in session / unattended → `docs/journal/plans/<today>.md` → offer to start the non-you work |
+| `/ds-end-day` (skill, any project) | `dsguard day status` → commit remaining work (one confirmation, `dsguard run commit --staged`) → **if Friday**: documenter comment pass on `week-files` → `verify-docs-only` → commit → `mark-review` → update Markdown files from the diff and fix broken links → tick plan, append story entry → draft next-workday plan → commit the journal to the project (repo mode) or to `~/.claude/journal` (home mode); push only if configured |
 | `bin/ds-monitor <project>` | `drift_monitor.py --config monitor.toml`; on exit 1 runs `claude -p` with Read/Grep/Glob only and saves a triage note |
 | Headless | `claude -p "/ds-premerge origin/main"`; or the scripts alone in CI |
 
@@ -286,6 +307,54 @@ cron ─▶ ds-monitor ─▶ drift_monitor.py ─▶ OK/WATCH: exit 0, history 
                                                             cause: pipeline break | population shift | expected | noise
 ```
 
+**Daily rhythm**
+
+```
+morning  dsguard day status ─▶ remaining work ─▶ "how much time today?" ─▶ plan sized to it
+                                                      plans/<today>.md: needs you | Claude | unattended
+evening  commit work (gate) ─▶ [Fri: comment pass ─▶ verify-docs-only ─▶ commit ─▶ mark-review]
+         ─▶ Markdown run-through ─▶ STORY.md entry ─▶ plans/<next workday>.md ─▶ commit
+```
+
+**Review loop (author ↔ stronger reviewer, refereed by a script)**
+
+```mermaid
+sequenceDiagram
+    participant A as Author (session model)
+    participant G as dsguard loop (referee)
+    participant R as pr-reviewer (stronger model, fresh context)
+    A->>G: start --base main
+    loop until DONE or ESCALATE
+        A->>G: gate (clean tree, dsguard + tests green)
+        A->>G: brief
+        G-->>A: diff range, prior findings, author responses
+        A->>R: brief only (no author reasoning)
+        R-->>A: JSON findings / resolved_prior / dispute rulings
+        A->>G: record-review
+        G-->>A: CONTINUE · DONE · ESCALATE (+ reason)
+        A->>A: fix (commit + test) or dispute with reason
+        A->>G: record-response (every blocking finding answered)
+    end
+    A->>A: push, PR comment with loop report
+```
+
+Referee rules, all deterministic:
+- A blocker or major needs a failure scenario.
+- The reviewer must account for every open blocking finding and rule on every dispute.
+- The author must answer every blocking finding.
+- Findings are matched across rounds by id, or by a fingerprint (category, file and title
+  words, ignoring line numbers).
+- A brief and an approval both need a green gate on that exact commit; a review is refused if
+  HEAD moved since the brief.
+- Deferred findings stay deferred, and an escalated loop is only replaced by `loop restart`.
+- **DONE** means no blocking finding is open and the reviewer approves.
+- **ESCALATE** on any of: the round limit, no progress, a finding reopened twice, a dispute
+  rejected twice, the blocking count rising two rounds running, or deferred items.
+
+State lives in `.dsguard/loop/<branch>.json`. With `enforce_on_push`, the pre-push dispatcher
+calls `dsguard loop check-push --refs-stdin`, which allows a branch only at the commit the loop
+approved. Deletions are allowed, and tags only on approved or already published commits.
+
 **Reversible cleanup**
 
 ```
@@ -307,7 +376,7 @@ dsguard/core.py DEFAULTS  <  ~/.claude/dsguard.toml  <  [tool.dsguard] in pyproj
 |---|---|---|
 | `[llm_gateway]` | mode (`ban` / `require_gateway_base_url`), allowed and banned hosts, banned imports, exempt paths, key env vars | `/ds-setup` + `suggest-gateway` |
 | `[secrets]`, `[exposure]` | allow-lists, data paths, PII domains | defaults |
-| `[licenses]` | `block_families` (empty = report only), `exceptions`, project interpreter | your policy when known |
+| `[licenses]` | `block_families` (empty = report only), `exceptions`, interpreter (user config only) | your policy when known |
 | `[sql]` | `dialect = "tsql"`, `partitioned_tables` (table → filter column) | `/ds-setup` |
 | `[code]`, `[docs]`, `[cleanup]`, `[hooks]` | thresholds and toggles | defaults |
 
@@ -318,9 +387,21 @@ dsguard/core.py DEFAULTS  <  ~/.claude/dsguard.toml  <  [tool.dsguard] in pyproj
 ```
 ~/.claude/
   ds-toolkit -> <repo>/claude_ds_agents     symlink: `git pull` updates everything
-  agents/*.md, commands/*.md -> symlinks
+  agents/*.md, commands/*.md, skills/<name>/ -> symlinks
   settings.json                              PreToolUse hook entry (backed up on change)
+  CLAUDE.md                                  your text + the toolkit's marked block (backed up on change)
   dsguard.toml                               your policy (copied once, then yours)
+~/.gitconfig  core.hooksPath                 opt-in: git-hooks/global for every repo
+
+<project>/docs/journal/                      journal, "repo" mode: committed with the project
+  STORY.md                                   continuous story, one entry per working day
+  plans/YYYY-MM-DD.md                        daily plans (drafted at end of day, refined at start)
+  .last-comment-review                       commit where the last Friday comment pass ended
+
+~/.claude/journal/                           private journals, "home" mode (its own git repo)
+  projects.json                              registry of every project the toolkit touched (last dsguard
+                                             verdict, journal location, last seen); `dsguard projects`
+  <project>-<id>/                            same layout as above, one folder per project
 
 <project>/.dsguard/                          self-ignoring (contains .gitignore "*")
   reports/      dsguard runs, premerge/audit reports
@@ -340,18 +421,23 @@ dsguard/core.py DEFAULTS  <  ~/.claude/dsguard.toml  <  [tool.dsguard] in pyproj
 | Unpickling runs arbitrary code | `scan` never loads; loading a pickle needs explicit `--trust-pickle`; torch weights use `weights_only=True` |
 | Destructive actions | Read-only agents by default; cleanup via approved plan and trash; hook asks on `rm -r`; SQL agents limited to read-only and estimated plans |
 | Invented numbers | `facts.py verify` must pass before `render` |
+| A reviewer that rubber-stamps, or an author that games the reviewer | The reviewer runs in a fresh context on a stronger model and sees only the code and the replies; a script, not either model, decides DONE; ping-pong, stalemates and repeated disputes escalate to a person; merging stays a human decision |
 | Documentation edits change behavior | `verify-docs-only` compares docstring-free ASTs |
 | A missing tool looks like a pass | `skipped` status and "Not covered" sections |
-| A broken hook blocks work | Fails open; pre-commit and pre-merge run the same rules |
+| Checking an untrusted repo runs its code | `dsguard run` executes nothing from the project: venv metadata is read, pip-audit gets only pins, sqlfluff gets no project config or templating; `licenses.python` and `daybook.home_dir` are user-config only; state is never written through symlinks |
+| A broken hook blocks work | Fails open with a visible warning that nothing is being checked |
 
 ## 9. Testing
 
-`tests/` has 58 tests: 57 pass with sklearn, LightGBM and XGBoost installed, and the PyTorch
-test skips without torch. They cover:
+`tests/` has 94 tests. The model-loader framework tests pass with sklearn, LightGBM and
+XGBoost installed and skip without them; the PyTorch test skips without torch. They cover:
 - every dsguard check, using planted positives and clean negatives;
 - verify-docs-only and the cleanup apply/restore round trip;
 - harness scripts on synthetic data with known planted problems (leaks, a weak segment, a missed non-linearity, drift, a volume drop);
 - real-framework round trips for the model loader;
+- the review-loop referee: convergence to DONE, every escalation rule, input validation for both models, the gate, push enforcement through the real pre-push hook;
+- machine-wide use: the git hook dispatcher in throwaway repos (blocks secrets, chains the repo's own hooks, honours opt-outs, never blocks when the toolkit is missing), installer round trips for the CLAUDE.md block and global hooks (never overriding an existing `core.hooksPath`), the cross-project registry;
+- the daybook: workday rollover, plan checkboxes, comment-only TODOs, next-step sections, link checks, the weekly-review marker, repo vs private journals, the cross-project registry, non-git projects, test detection for pytest/npm/make/R;
 - a pickle built to run code when loaded, which `scan` must leave inert;
 - the facts verifier accepting rounded and percent forms and rejecting invented, uncited or dangling numbers.
 
@@ -376,8 +462,12 @@ isn't installed.
 ## 11. Known limitations
 
 - **Unverified paths.** The PyTorch loading path is implemented but untested here (PyTorch
-  downloads were blocked). No agent or command has yet been run end to end inside a live
-  Claude Code session.
+  downloads were blocked). No agent, command or skill has yet been run end to end inside a
+  live Claude Code session. That includes a full review loop with a live reviewer model; the
+  referee itself is tested.
+- **Review loop matching.** When the reviewer rewords a finding without linking its earlier
+  id, it is matched by a fingerprint of category, file and title words. A heavily reworded
+  finding can come back as "new", which can delay an ESCALATE for "no progress" by a round.
 - **Heuristics.** SQL rules are text heuristics, not a parser; the sql-reviewer agent and
   sqlfluff cover semantics. Static leakage rules follow variable names and call order, not
   data flow.

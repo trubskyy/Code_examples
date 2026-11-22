@@ -1,7 +1,7 @@
 ---
-description: One-time adoption on a new (work) machine. Checks the install, adopts the prewritten LLM gateway, configures SQL Server tables, license reporting and model discovery, and writes ~/.claude/dsguard.toml.
+description: One-time adoption on a new (work) machine. Checks the install, adopts the prewritten LLM gateway, configures SQL Server tables, license reporting, model discovery and the review loop's reviewer model, and writes ~/.claude/dsguard.toml.
 argument-hint: "[path to the gateway client code, optional]"
-allowed-tools: Bash(~/.claude/ds-toolkit/bin/dsguard:*), Bash(python3:*), Bash(git:*), Bash(which:*), Bash(ls:*), Read, Grep, Glob, Edit, Write
+allowed-tools: Bash(~/.claude/ds-toolkit/bin/dsguard run:*), Bash(~/.claude/ds-toolkit/bin/dsguard suggest-gateway:*), Bash(git status:*), Bash(git config --global --get core.hooksPath), Bash(which:*), Bash(ls:*), Read, Grep, Glob, Edit, Write
 ---
 
 Set up the DS agent toolkit on this machine. Work through the steps in order, show the user
@@ -66,7 +66,7 @@ names exactly as queries write them (e.g. `dbo.FactSales`).
 ## 4. Licenses
 
 Run `~/.claude/ds-toolkit/bin/dsguard run licenses --root <project>` with that project's venv
-active, or set `[licenses] python`. Show the split: *always free* vs *potential issues*, with
+active, or set `[licenses] python` (absolute path) in `~/.claude/dsguard.toml`; project config can't set it. Show the split: *always free* vs *potential issues*, with
 the plain-English obligation for each family. Leave `block_families` empty unless the user has
 a company policy. Record any packages legal has approved under `[licenses.exceptions]`, with
 the reason.
@@ -78,10 +78,33 @@ framework without loading them. Point out pickles (`--trust-pickle` needed, only
 project's own artifacts) and torch state_dicts (need `--model-class` from the project code).
 For models defined in code, note the `--factory module:function` route.
 
-## 6. Per-repository commit gate
+## 6. Review loop
 
-For each repo the user names: `ln -s ~/.claude/ds-toolkit/git-hooks/pre-commit <repo>/.git/hooks/pre-commit`
-(ask first; if a pre-commit hook already exists, show it and don't overwrite it).
+`/ds-review-loop` uses a stronger reviewer model than the session's own. Check which models the
+company gateway offers in Claude Code (ask the user, or try `/model`):
+- **Fable available**: keep `[review_loop] reviewer_model = "fable"`.
+- **Not available**: set `"opus"`, so the reviewer is still at least as strong as a Sonnet
+  author.
+
+Ask whether every push should require an approved loop. If yes, set
+`enforce_on_push = true`; it needs the global git hooks from step 7. Put branches where that's
+impractical in `exempt_branches`.
+
+## 7. Commit gate for every repository
+
+Check `git config --global --get core.hooksPath` (`install.py --git-hooks` also checks system
+config and included files, and skips if any of them sets a different path):
+- **Points at `~/.claude/ds-toolkit/git-hooks/global`**: the gate already covers every repo.
+- **Unset**: offer to enable it machine-wide with `python3 ~/.claude/ds-toolkit/install.py --git-hooks`.
+  Explain that each repo's own hooks (pre-commit framework, Git LFS) still run through the
+  dispatcher; that `git config ds.guard false` opts a repo out; and that `DSGUARD_SKIP=1`
+  skips one commit.
+- **Set to something else** (company tooling): don't change it. Offer per-repo links instead:
+  `ln -s ~/.claude/ds-toolkit/git-hooks/pre-commit <repo>/.git/hooks/pre-commit`. Ask first,
+  and never overwrite an existing hook.
+
+Also confirm `~/.claude/CLAUDE.md` contains the toolkit block (between the `ds-toolkit:start`
+and `ds-toolkit:end` markers); re-run `install.py` if not.
 
 ## Finish
 

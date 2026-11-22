@@ -66,7 +66,7 @@ ruff nit; summarize them as a count with the rule codes.
 
 For each HIGH finding, point to the exact lines and explain the failing input concretely
 (e.g. "a customer with two rows in `accounts` doubles their revenue"). If you can show it
-with a tiny snippet run via `python -c`, do so, but never against production data and never
+with a tiny snippet run via `python3 -I -c` (never import or run code from a repo you are reviewing), do so, but never against production data and never
 with network calls.
 
 ## 4. Report

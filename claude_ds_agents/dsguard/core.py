@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import copy
 import json
+import os
 import re
 import subprocess
 import tomllib
@@ -15,6 +16,9 @@ from pathlib import Path
 USER_CONFIG = Path.home() / ".claude" / "dsguard.toml"
 STATE_DIR = ".dsguard"
 MAX_SCAN_BYTES = 2_000_000
+# What the git-hook entry points return for "blocked". Crashes, sys.exit(message) and argparse
+# exit 1 or 2, so they can't be mistaken for a finding. git-hooks/ has the same number.
+BLOCKED_EXIT = 10
 SEVERITY_ORDER = {"block": 0, "warn": 1, "info": 2}
 
 # Only used when the project is not a git repo; with git, .gitignore decides.
@@ -106,7 +110,41 @@ DEFAULTS: dict = {
     "docs": {"require_module_docstring": True, "min_public_coverage": 0.8},
     "cleanup": {"large_file_mb": 10, "entrypoints": [], "keep": []},
     "hooks": {"ask_on_recursive_rm": True},
+    "review_loop": {
+        "reviewer_model": "fable",        # Claude Code model alias for the reviewer subagent
+        "max_rounds": 4,
+        "block_on": ["blocker", "major"], # severities that must be resolved before DONE
+        "fix_minor": False,               # author also fixes minor/nit findings
+        "test_command": "",               # default: the daybook's detection (pytest / npm / make / R)
+        "post_to_pr": True,               # post the round report as a PR comment when a PR exists
+        "enforce_on_push": False,         # pre-push blocks commits the loop did not approve
+        "exempt_branches": [],
+    },
+    "daybook": {
+        "dir": "docs/journal",            # in-repo journal location (location = repo)
+        "location": "ask",                # repo | home | ask (ask once per project, then remembered)
+        "home_dir": "~/.claude/journal",  # private journals + projects.json registry
+        "test_command": "",               # override test detection (pytest / npm / make / R)
+        "workdays": ["Mon", "Tue", "Wed", "Thu", "Fri"],
+        "weekly_review_day": "Fri",
+        "push": False,
+        "code_extensions": [".py", ".ipynb", ".sql", ".R", ".r", ".sh", ".js", ".ts"],
+        "todo_markers": ["TODO", "FIXME", "XXX", "HACK"],
+    },
 }
+
+
+# Only ~/.claude/dsguard.toml may set these: they name a program to run or a place to write
+# outside the project, and a project's own config comes with whatever repository was cloned.
+USER_ONLY = {"licenses": ("python",), "daybook": ("home_dir",)}
+
+
+def _project_layer(layer: dict) -> dict:
+    out = dict(layer)
+    for section, keys in USER_ONLY.items():
+        if isinstance(layer.get(section), dict):
+            out[section] = {k: v for k, v in layer[section].items() if k not in keys}
+    return out
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -119,7 +157,9 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 
 def load_config(root: Path) -> dict:
-    """Defaults < ~/.claude/dsguard.toml < [tool.dsguard] in pyproject < ./dsguard.toml."""
+    """Defaults < ~/.claude/dsguard.toml < [tool.dsguard] in pyproject < ./dsguard.toml.
+
+    The two project layers can't set the USER_ONLY keys."""
     config = copy.deepcopy(DEFAULTS)
     if USER_CONFIG.is_file():
         _deep_merge(config, tomllib.loads(USER_CONFIG.read_text()))
@@ -129,10 +169,10 @@ def load_config(root: Path) -> dict:
             tool = tomllib.loads(pyproject.read_text()).get("tool", {})
         except tomllib.TOMLDecodeError:
             tool = {}
-        _deep_merge(config, tool.get("dsguard", {}))
+        _deep_merge(config, _project_layer(tool.get("dsguard", {})))
     local = root / "dsguard.toml"
     if local.is_file():
-        _deep_merge(config, tomllib.loads(local.read_text()))
+        _deep_merge(config, _project_layer(tomllib.loads(local.read_text())))
     return config
 
 
@@ -146,7 +186,8 @@ def match_any(rel: str, patterns: list[str]) -> bool:
 def git(root: Path, *args: str) -> str | None:
     try:
         proc = subprocess.run(
-            ["git", "-C", str(root), *args], capture_output=True, text=True, check=False
+            ["git", "-C", str(root), *args], capture_output=True, text=True, check=False,
+            errors="surrogateescape",  # file names are bytes; keep odd ones usable as paths
         )
     except FileNotFoundError:
         return None
@@ -197,8 +238,22 @@ def staged_files(root: Path) -> set[str]:
     return set(_split_z(git(root, "diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR") or ""))
 
 
+class UnsafeStateDir(RuntimeError):
+    """.dsguard contains a symlink, so writing state could write anywhere."""
+
+
 def ensure_state_dir(root: Path) -> Path:
     state = root / STATE_DIR
+    # A cloned repo can ship .dsguard with links to files in the user's home. trash/ is exempt
+    # below its top: apply-cleanup may have moved a project's own links there.
+    if state.is_symlink():
+        raise UnsafeStateDir(f"{state} is a symlink; refusing to write through it")
+    for folder, dirs, files in os.walk(state):
+        for name in dirs + files:
+            if os.path.islink(os.path.join(folder, name)):
+                raise UnsafeStateDir(f"{os.path.join(folder, name)} is a symlink; refusing to write through it")
+        if Path(folder) == state / "trash":
+            dirs.clear()
     state.mkdir(exist_ok=True)
     ignore = state / ".gitignore"
     if not ignore.exists():

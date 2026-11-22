@@ -13,10 +13,13 @@ from pathlib import Path
 from .core import CheckResult, Context, call_name, const_str, kwarg, python_sources
 
 DUMP = r"""
-import importlib.metadata as m, json
+import importlib.metadata as m, json, sys
 out = []
-for d in m.distributions():
+# With arguments: read the metadata in those directories. Nothing in them is imported.
+for d in m.distributions(**({"path": sys.argv[1:]} if sys.argv[1:] else {})):
     md = d.metadata
+    if md is None:
+        continue
     out.append({"name": md.get("Name"), "version": d.version,
                 "expression": md.get("License-Expression"), "license": md.get("License"),
                 "classifiers": [c for c in (md.get_all("Classifier") or []) if c.startswith("License ::")]})
@@ -61,13 +64,26 @@ def normalize(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
-def find_python(root: Path, cfg: dict) -> tuple[str, bool]:
+def package_source(root: Path, cfg: dict) -> tuple[list[str], str, bool]:
+    """(command that lists packages, what it scanned, is that the project's environment).
+
+    Nothing from the project is executed: its venv's metadata is read by dsguard's own
+    interpreter in isolated mode (-I: the working directory is not importable). Only an
+    interpreter named in the user's own config is run (see core.USER_ONLY)."""
     if cfg["python"]:
-        return cfg["python"], True
-    for candidate in (".venv/bin/python", "venv/bin/python", ".venv/Scripts/python.exe"):
-        if (root / candidate).exists():
-            return str(root / candidate), True
-    return sys.executable, False
+        named = Path(cfg["python"]).expanduser()
+        if not named.is_absolute():
+            raise ValueError("licenses.python must be an absolute path")
+        return [str(named), "-I", "-c", DUMP], str(named), True
+    read = [sys.executable, "-I", "-c", DUMP]
+    for venv in (".venv", "venv"):
+        sites = [p for pattern in ("lib/python*/site-packages", "Lib/site-packages")
+                 for p in (root / venv).glob(pattern) if p.is_dir()]
+        if sites:
+            return [*read, *map(str, sites)], venv, True
+    # dsguard's own environment, user site included (which -I alone would leave out)
+    here = [p for p in sys.path if p and Path(p).is_absolute()]
+    return [*read, *here], sys.executable, False
 
 
 def license_options(dist: dict) -> list[str]:
@@ -149,15 +165,16 @@ def _hf_ids(ctx: Context, result: CheckResult) -> None:
 def run(ctx: Context) -> CheckResult:
     result = CheckResult("licenses")
     cfg = ctx.config["licenses"]
-    python, project_env = find_python(ctx.root, cfg)
+    command, scanned, project_env = package_source(ctx.root, cfg)
     if not project_env:
-        result.notes.append(f"no project venv found; scanned {python}. Set licenses.python to the project interpreter")
-    proc = subprocess.run([python, "-c", DUMP], capture_output=True, text=True, check=False)
+        result.notes.append(f"no project venv found; scanned {scanned}. To scan another environment, set "
+                            "licenses.python in ~/.claude/dsguard.toml (a project's config can't)")
+    proc = subprocess.run(command, capture_output=True, text=True, check=False, cwd=Path(sys.executable).anchor)
     try:
         dists = json.loads(proc.stdout)
     except ValueError:
         result.status = "error"
-        result.notes.append(f"could not list packages with {python}: {proc.stderr.strip()[:300]}")
+        result.notes.append(f"could not list packages in {scanned}: {proc.stderr.strip()[:300]}")
         return result
     direct = direct_dependencies(ctx.root)
     exceptions = {normalize(k): v for k, v in cfg["exceptions"].items()}

@@ -2,4 +2,9 @@
 # Blocks commits that bypass the LLM gateway or contain secrets.
 # Install per repo:  ln -s ~/.claude/ds-toolkit/git-hooks/pre-commit .git/hooks/pre-commit
 # Note: scans the working-tree copy of staged files.
-exec "$HOME/.claude/ds-toolkit/bin/dsguard" run commit --staged --no-save
+# Only exit code 10 (a real finding) blocks; a broken or missing toolkit warns.
+"$HOME/.claude/ds-toolkit/bin/dsguard" run commit --staged --no-save --hook
+rc=$?
+[ "$rc" -eq 10 ] && exit 1
+[ "$rc" -eq 0 ] || echo "dsguard: WARNING: gate could not run (exit $rc); commit allowed UNCHECKED" >&2
+exit 0

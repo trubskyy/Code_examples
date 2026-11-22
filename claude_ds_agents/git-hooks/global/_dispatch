@@ -1,0 +1,88 @@
+#!/bin/sh
+# Machine-wide git hook dispatcher for the DS toolkit (opt-in: install.py --git-hooks).
+#
+# `git config --global core.hooksPath <this dir>` makes git look here, instead of each repo's
+# hooks directory, for every repository (work tree or bare) without a hooksPath of its own.
+# So every hook git looks up there, client or server side, has a stub that calls this dispatcher:
+#   1. on pre-commit, run the dsguard commit gate; on pre-push, the review-loop check;
+#   2. then run the repo's own hook (<git dir>/hooks/<name>) if there is one.
+# Two hooks change git's behavior just by existing, so without a repo hook they are not no-ops:
+#   push-to-checkout   do what git would have done (update a clean tree, refuse a dirty one)
+#   proc-receive       fail, as git does when there is no such hook
+#
+# Opt out per repo:   git config ds.guard false
+# Skip once:          DSGUARD_SKIP=1 git commit ...
+# A broken or missing toolkit never blocks: only exit code 10 (BLOCKED_EXIT in dsguard/core.py)
+# does, and a crash cannot produce that code.
+
+BLOCKED=10
+hook="$1"
+shift
+own="$(git rev-parse --git-common-dir 2>/dev/null)/hooks/$hook"
+
+guarded() {
+    [ "${DSGUARD_SKIP:-0}" != "1" ] || return 1
+    [ "$(git config --bool ds.guard 2>/dev/null || echo true)" != "false" ] || return 1
+    dsguard="${DSGUARD_BIN:-$HOME/.claude/ds-toolkit/bin/dsguard}"
+    [ -x "$dsguard" ]
+}
+
+if [ "$hook" = "pre-commit" ] && guarded; then
+    "$dsguard" run commit --staged --no-save --hook
+    rc=$?
+    if [ "$rc" -eq "$BLOCKED" ]; then
+        echo "dsguard: commit blocked (fix the findings above, or DSGUARD_SKIP=1 to bypass once)" >&2
+        exit 1
+    elif [ "$rc" -ne 0 ]; then
+        echo "dsguard: WARNING: gate could not run (exit $rc); commit allowed UNCHECKED" >&2
+    fi
+fi
+
+# pre-push gets the refs being pushed on stdin. Both the check and the repo's own hook need them.
+if [ "$hook" = "pre-push" ] && guarded; then
+    # Kept in memory: a temp file comes back empty when /tmp is full. The x keeps trailing newlines.
+    if ! refs=$(cat && echo x); then
+        echo "dsguard: cannot read the refs being pushed; push stopped" >&2
+        exit 1
+    fi
+    refs=${refs%x}
+    printf '%s' "$refs" | "$dsguard" loop check-push --refs-stdin
+    rc=$?
+    if [ "$rc" -eq "$BLOCKED" ]; then
+        exit 1
+    elif [ "$rc" -ne 0 ]; then
+        echo "dsguard: WARNING: review-loop check could not run (exit $rc); push allowed UNCHECKED" >&2
+    fi
+    [ -x "$own" ] || exit 0
+    printf '%s' "$refs" | "$own" "$@"
+    exit $?
+fi
+
+if [ -x "$own" ]; then
+    exec "$own" "$@"
+fi
+
+case "$hook" in
+    proc-receive)
+        echo "proc-receive: this repository has no proc-receive hook" >&2
+        exit 1 ;;
+    push-to-checkout)
+        # Same steps as git's built-in push_to_deploy() in builtin/receive-pack.c.
+        cd "${GIT_WORK_TREE:-.}" || exit 1
+        git update-index -q --ignore-submodules --refresh || exit 1
+        if ! git diff-files --quiet --ignore-submodules --; then
+            echo "push-to-checkout: working directory has unstaged changes" >&2
+            exit 1
+        fi
+        if git rev-parse -q --verify HEAD >/dev/null; then
+            against=HEAD
+        else
+            against=$(git hash-object -t tree /dev/null)
+        fi
+        if ! git diff-index --quiet --cached --ignore-submodules "$against" --; then
+            echo "push-to-checkout: working directory has staged changes" >&2
+            exit 1
+        fi
+        git read-tree -u -m "$1" || exit 1 ;;
+esac
+exit 0
