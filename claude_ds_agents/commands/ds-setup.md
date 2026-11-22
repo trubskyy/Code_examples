@@ -1,5 +1,5 @@
 ---
-description: One-time adoption on a new (work) machine. Checks the install, adopts the prewritten LLM gateway, configures SQL Server tables, license reporting and model discovery, and writes ~/.claude/dsguard.toml.
+description: One-time adoption on a new (work) machine. Checks the install, adopts the prewritten LLM gateway, configures SQL Server tables, license reporting, model discovery and the review loop's reviewer model, and writes ~/.claude/dsguard.toml.
 argument-hint: "[path to the gateway client code, optional]"
 allowed-tools: Bash(~/.claude/ds-toolkit/bin/dsguard:*), Bash(python3:*), Bash(git:*), Bash(which:*), Bash(ls:*), Read, Grep, Glob, Edit, Write
 ---
@@ -78,7 +78,19 @@ framework without loading them. Point out pickles (`--trust-pickle` needed, only
 project's own artifacts) and torch state_dicts (need `--model-class` from the project code).
 For models defined in code, note the `--factory module:function` route.
 
-## 6. Commit gate for every repository
+## 6. Review loop
+
+`/ds-review-loop` uses a stronger reviewer model than the session's own. Check which models the
+company gateway offers in Claude Code (ask the user, or try `/model`):
+- **Fable available**: keep `[review_loop] reviewer_model = "fable"`.
+- **Not available**: set `"opus"`, so the reviewer is still at least as strong as a Sonnet
+  author.
+
+Ask whether every push should require an approved loop. If yes, set
+`enforce_on_push = true`; it needs the global git hooks from step 7. Put branches where that's
+impractical in `exempt_branches`.
+
+## 7. Commit gate for every repository
 
 Check `git config --global --get core.hooksPath`:
 - **Points at `~/.claude/ds-toolkit/git-hooks/global`**: the gate already covers every repo.

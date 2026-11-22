@@ -4,7 +4,9 @@ argument-hint: "[base-ref, default origin/main]"
 allowed-tools: Bash(~/.claude/ds-toolkit/bin/dsguard:*), Bash(git diff:*), Bash(git status:*), Bash(git rev-parse:*), Bash(git fetch:*), Read, Grep, Glob, Write, Agent, Task
 ---
 
-Run the pre-merge gate for this repository. Base ref: `$ARGUMENTS` (if empty, use `origin/main`,
+Run the pre-merge gate for this repository. This is a one-shot audit and report. To have a
+stronger model review the branch and loop with the author until the findings are fixed, use
+`/ds-review-loop` instead (or after this). Base ref: `$ARGUMENTS` (if empty, use `origin/main`,
 falling back to `main` and then `master`, whichever exists).
 
 ## Step 1: deterministic gate (always first)

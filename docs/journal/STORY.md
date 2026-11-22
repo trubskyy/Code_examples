@@ -6,29 +6,34 @@ the `ds-end-day` skill from commits, the day's plan and the conversation; edit f
 
 ## Story so far
 
-_Last refreshed 2026-10-23._
+_Last refreshed 2026-11-22._
 
 The repo began as a single runnable example comparing LLM fact extraction with vector search.
 It is now mainly home to **`claude_ds_agents/`**, a personal Claude Code toolkit for a
-data-science lead. The toolkit has 11 agents, 3 commands, 2 daily-rhythm skills, a
-deterministic engine (`dsguard`) and harness scripts for models, leakage, LLM evals, drift and
-verified summaries.
+data-science lead. It's installed once per machine and applies to every project. It has 12
+agents, 4 commands (setup, pre-merge, audit, review loop), 2 daily-rhythm skills, a
+deterministic engine (`dsguard`), and harness scripts for models, leakage, LLM evals, drift
+and verified summaries.
 
 Its organising rule: **scripts decide whatever a script can decide; agents only judge.**
 
 Built and tested so far:
-- security and gateway guardrails;
+- security and gateway guardrails at edit, commit and push time;
 - code, SQL (SQL Server), leakage and refactor reviews;
+- an author/reviewer loop with a stronger reviewer model and a script as referee;
 - model diagnostics for sklearn, LightGBM, XGBoost and PyTorch;
 - LLM evals, drift monitoring and stakeholder summaries;
 - docs and cleanup maintenance;
-- start-of-day and end-of-day routines with this journal.
+- start-of-day and end-of-day routines with this journal, and one view across all projects.
 
 Still open:
-- adopting the prewritten LLM gateway and the SQL Server table list on the work machine;
+- adopting the gateway and SQL Server tables on the work machine;
+- choosing the reviewer model the gateway offers;
+- a Windows-ready installer;
 - a company license policy;
 - verifying the PyTorch loader;
-- running the agents in a live session;
+- a first live run of the agents and the review loop;
+- merging the four latest commits;
 - the `stats-reviewer` and `team-pr-reviewer` agents.
 
 ## 2026-10-18 (Sun)

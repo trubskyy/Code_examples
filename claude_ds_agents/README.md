@@ -51,9 +51,9 @@ How the pieces fit is described in [ARCHITECTURE.md](ARCHITECTURE.md).
 |---|---|
 | **Built** | 12 agents, 4 commands, 2 skills (start/end of day), 11 `dsguard` checks plus 6 tools (including the review-loop referee), 6 harness scripts, the edit-time hook, the pre-commit hook, the scheduler wrapper, the installer |
 | **Verified** | 94 tests. The 3 model-loader framework tests pass with sklearn, LightGBM and XGBoost installed and skip without them; PyTorch skips (unverified). CLI runs end to end on synthetic data; installer install/uninstall (CLAUDE.md block, global git hooks) in a throwaway home; the commit dispatcher in throwaway repos; the edit hook against sample tool calls. |
-| **Not yet verified** | PyTorch model loading (implemented; PyTorch downloads were blocked in the build environment). Agents, commands and skills haven't been run inside a live Claude Code session. |
-| **Waiting on the work machine** | Gateway adoption and SQL Server table list, both via `/ds-setup`. License policy (report-only until you set `block_families`). |
-| **Next** | `stats-reviewer` (A/B tests) and `team-pr-reviewer` (see the end of this file) |
+| **Not yet verified** | PyTorch model loading (implemented; PyTorch downloads were blocked in the build environment). Agents, commands and skills, including a full `/ds-review-loop` with a live reviewer model, haven't been run inside a live Claude Code session. Windows: never tested (see Next steps). |
+| **Waiting on the work machine** | Gateway adoption and SQL Server table list, both via `/ds-setup`. Which reviewer model the gateway offers (Fable, otherwise Opus). License policy (report-only until you set `block_families`). |
+| **Next** | Windows-ready installer, a first live review loop, then `stats-reviewer` (A/B tests) and `team-pr-reviewer` (see the end of this file) |
 
 ## Quick start
 
@@ -237,10 +237,10 @@ Thresholds for code, docs and cleanup have sensible defaults. Every option is li
 ```
 claude_ds_agents/
   README.md  ARCHITECTURE.md  install.py  dsguard.example.toml
-  agents/      11 subagent definitions
-  commands/    ds-setup, ds-premerge, ds-audit
+  agents/      12 subagent definitions (11 specialists + pr-reviewer)
+  commands/    ds-setup, ds-premerge, ds-audit, ds-review-loop
   skills/      ds-start-day, ds-end-day
-  dsguard/     deterministic engine (core, cli, 11 checks, onboarding, daybook)
+  dsguard/     deterministic engine (core, cli, 11 checks, onboarding, daybook, reviewloop referee)
   harness/     model_loader, model_diagnostics, leakage_check, llm_eval, drift_monitor, facts, common
   hooks/       pretooluse_guard.py (edit-time guard)
   claude/      CLAUDE-block.md (managed block for ~/.claude/CLAUDE.md)
@@ -302,9 +302,17 @@ gateway Claude Code uses at work. Settings are under `[review_loop]` in `dsguard
 | Agent | Deterministic part to build first | Agent judgement |
 |---|---|---|
 | `stats-reviewer` (A/B tests) | Sample-ratio-mismatch test, power/MDE calculator, Holm/BH correction, peeking check, CUPED helper, delta-method CIs for ratio metrics | Metric fits the decision, novelty effects, interference, practical vs statistical significance |
-| `team-pr-reviewer` | dsguard on the PR diff, the team standards file as a pass/fail checklist, the author's recurring review themes | Coaching feedback; what to escalate to you |
+| `team-pr-reviewer` | dsguard on the PR diff, the team standards file as a pass/fail checklist, the author's recurring review themes. It can reuse the `dsguard loop` finding format and tracking | Coaching feedback for a person (unlike `pr-reviewer`, which reviews a model's work); what to escalate to you |
+
+Windows readiness (asked for; not built yet):
+- The installer finds a working Python (`python` / `py`) and writes it into the hook and
+  launchers instead of `python3`.
+- It copies files when links aren't allowed.
+- `.cmd` launchers for `dsguard` and `ds-monitor`.
+- A Task Scheduler command for drift checks.
 
 Smaller follow-ups:
 - A weekly model-health note: feed drift results to `stakeholder-writer`.
 - Write model-diagnostics importance where `monitor.toml` reads it.
-- Run the agents end to end in a live session and tune their prompts.
+- Run the agents end to end in a live session and tune their prompts, starting with the
+  reviewer prompt on a real `/ds-review-loop`.

@@ -11,7 +11,7 @@ projects. It runs in Claude Code on the lead's own machine and covers six jobs:
 | Job | Examples |
 |---|---|
 | **Guard** | Nothing bypasses the LLM gateway, no secrets or customer data leak, no license surprises |
-| **Review** | Code, SQL, leakage, refactoring opportunities, before merge or on demand |
+| **Review** | Code, SQL, leakage, refactoring opportunities, before merge or on demand; an author/reviewer loop in which a stronger model reviews every push until the findings are resolved |
 | **Analyze** | Model diagnostics, data leakage checks, LLM evaluations |
 | **Monitor** | Scheduled drift checks on deployed models |
 | **Communicate** | Stakeholder summaries whose numbers are machine-verified |
@@ -34,7 +34,8 @@ self-ignoring `.dsguard/` folder, and their journal.
    "Not covered" section.
 3. **Skipped is never passed.** A missing external tool (gitleaks, pip-audit, sqlfluff, bandit)
    is reported as skipped or not covered, never as clean.
-4. **Least privilege by default.** Four of the eleven agents are strictly read-only. The rest
+4. **Least privilege by default.** Five of the twelve agents are strictly read-only (the four
+   reviewers and `pr-reviewer`). The rest
    write only to docs, `.dsguard/` scratch and reports, eval files or monitoring config, never to
    pipeline or model code. Where they write, their output is verified (documenter →
    `verify-docs-only`, stakeholder-writer → `facts.py verify`, cleanup → your approval and a
@@ -74,11 +75,12 @@ flowchart TB
         A9[documenter]
         A10[cleanup-agent]
         A11[stakeholder-writer]
+        A12[pr-reviewer<br/>stronger model]:::ro
     end
 
     subgraph Engine["Layer 2: dsguard (deterministic, stdlib)"]
         CHK[checks: gateway · secrets · exposure · pysec · licenses · vulns<br/>sql · code · leakage · docs · cleanup]
-        TOOLS[verify-docs-only · apply/restore-cleanup · suggest-gateway]
+        TOOLS[verify-docs-only · apply/restore-cleanup · suggest-gateway<br/>day / projects · loop referee]
     end
 
     subgraph Harness["Layer 3: harness/ (deterministic, numpy+pandas)"]
@@ -132,7 +134,7 @@ The same picture as text:
 | Component | Trigger | Decision |
 |---|---|---|
 | `hooks/pretooluse_guard.py` | Claude Code `PreToolUse` on `Write\|Edit\|MultiEdit\|NotebookEdit\|Bash` | **deny**: new content imports a provider SDK, references a provider host, or contains a high-confidence secret; a Bash command calls a provider host. **ask**: recursive `rm`. Otherwise silent. |
-| `git-hooks/global/` (opt-in, `install.py --git-hooks`) | any git hook in **any repo**, via global `core.hooksPath` | `_dispatch`: on pre-commit, `dsguard run commit --staged` (a block fails the commit; a missing or broken toolkit doesn't); then it **always runs the repo's own `.git/hooks/<name>`**, so pre-commit framework, Git LFS and custom hooks keep working. Opt-outs: `git config ds.guard false`, `DSGUARD_SKIP=1`. Never installed over an existing global `core.hooksPath`. |
+| `git-hooks/global/` (opt-in, `install.py --git-hooks`) | any git hook in **any repo**, via global `core.hooksPath` | `_dispatch`: on pre-commit, `dsguard run commit --staged` (a block fails the commit; a missing or broken toolkit doesn't); on pre-push, `dsguard loop check-push` (blocks unapproved commits only when `enforce_on_push` is on); then it **always runs the repo's own `.git/hooks/<name>`**, so pre-commit framework, Git LFS and custom hooks keep working. Opt-outs: `git config ds.guard false`, `DSGUARD_SKIP=1`. Never installed over an existing global `core.hooksPath`. |
 | `git-hooks/pre-commit` | `git commit` in a repo it's linked into | Same gate, per repo, for machines where the global setting is taken |
 | `claude/CLAUDE-block.md` | every Claude Code session | Installed as a marked block in `~/.claude/CLAUDE.md`: tells Claude in any project that the toolkit exists, which agent fits which job, to gate commits, and to read the project's story |
 
@@ -147,7 +149,7 @@ the backstop. Both use the same functions as the full checks
 dsguard/
   core.py      config loading and merging, file discovery (git-aware), Finding/CheckResult,
                Context (cached reads), Python and notebook source iteration, AST helpers
-  cli.py       `run` / `verify-docs-only` / `suggest-gateway` / `apply-cleanup` / `restore-cleanup`
+  cli.py       `run` / `verify-docs-only` / `suggest-gateway` / `day` / `projects` / `loop` / `apply-cleanup` / `restore-cleanup`
   gateway.py   provider imports, hosts, key env vars, client base_url (ban or require mode)
   secrets.py   token patterns, entropy-checked assignments, credential files, gitleaks
   exposure.py  data/model files in git, notebook outputs, PII (email/SSN/Luhn cards), network binds
@@ -160,6 +162,8 @@ dsguard/
   docs.py      docstring coverage, stale params, README; verify_docs_only (docstring-free AST diff)
   cleanup.py   junk, suspect names, orphan modules; reversible apply/restore
   onboard.py   reads a prewritten gateway client and drafts [llm_gateway] config
+  reviewloop.py the review-loop referee: gate, reviewer-JSON validation, cross-round finding
+               tracking, CONTINUE/DONE/ESCALATE decisions, report, pre-push check
   daybook.py   facts for the daily skills, in any project: workdays and next workday, open plan
                items, TODO comments, next-step sections, today's and this week's changed files
                (git, or file times without git), Markdown link check, test-command detection;
@@ -229,6 +233,7 @@ same template: **run the script → judgement checklist → standard report**.
 | llm-evaluator | + Edit, Write | eval sets and adapters | `dsguard run gateway`, `llm_eval.py` |
 | drift-monitor | + Write | `monitor.toml`, `monitoring/*.sql` | `drift_monitor.py` |
 | stakeholder-writer | + Write | `.dsguard/summaries/` | `facts.py collect/verify/render` |
+| pr-reviewer | Bash, Read, Grep, Glob (stronger model, set per run) | nothing | `dsguard loop brief`; its JSON is validated by `dsguard loop record-review` |
 
 **Report contract** (so orchestrators can merge reports): a `## <agent>` header, a
 `Verdict:` line, a findings table with severity and location, then "Needs verification" or
@@ -453,7 +458,11 @@ isn't installed.
 
 - **Unverified paths.** The PyTorch loading path is implemented but untested here (PyTorch
   downloads were blocked). No agent, command or skill has yet been run end to end inside a
-  live Claude Code session.
+  live Claude Code session. That includes a full review loop with a live reviewer model; the
+  referee itself is tested.
+- **Review loop matching.** When the reviewer rewords a finding without linking its earlier
+  id, it is matched by a fingerprint of category, file and title words. A heavily reworded
+  finding can come back as "new", which can delay an ESCALATE for "no progress" by a round.
 - **Heuristics.** SQL rules are text heuristics, not a parser; the sql-reviewer agent and
   sqlfluff cover semantics. Static leakage rules follow variable names and call order, not
   data flow.
