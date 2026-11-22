@@ -82,7 +82,7 @@ The commit gate:
   `ln -s ~/.claude/ds-toolkit/git-hooks/pre-commit .git/hooks/pre-commit`
 - **Opt out**: per repo with `git config ds.guard false`, or for one commit with
   `DSGUARD_SKIP=1 git commit …`.
-- **Existing setting**: if `core.hooksPath` is already set globally (e.g. by company tooling),
+- **Existing setting**: if `core.hooksPath` is already set in system or global config or a file they include (e.g. by company tooling),
   the installer leaves it alone and says so.
 
 Requirements: Python 3.11+. `dsguard`, the hooks, `llm_eval.py` and `facts.py` need only the
@@ -244,7 +244,7 @@ claude_ds_agents/
   harness/     model_loader, model_diagnostics, leakage_check, llm_eval, drift_monitor, facts, common
   hooks/       pretooluse_guard.py (edit-time guard)
   claude/      CLAUDE-block.md (managed block for ~/.claude/CLAUDE.md)
-  git-hooks/   pre-commit (per repo), global/ (machine-wide dispatcher + stubs for every hook)
+  git-hooks/   pre-commit (per repo), global/ (machine-wide dispatcher + stubs for client and server hooks)
   bin/         dsguard launcher, ds-monitor scheduler wrapper
   tests/       94 tests
 ```
@@ -271,8 +271,8 @@ author fixes / disputes ◀── referee: CONTINUE │ DONE ─▶ push + PR co
 ```
 
 The referee enforces what neither model should decide:
-- **Gate first.** Every round starts with dsguard and the tests green, so no review is spent on
-  broken code.
+- **Gate first.** Every round needs dsguard and the tests green on a clean tree at that exact
+  commit; without that there is no brief and no approval.
 - **Findings must be concrete.** Every blocker or major needs a failure scenario. The reviewer
   must resolve, re-report or rule on every earlier finding and every dispute.
 - **Every finding gets an answer.** The author must mark each blocking finding fixed, disputed

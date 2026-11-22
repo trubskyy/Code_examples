@@ -1,7 +1,7 @@
 ---
 description: Pre-merge gate. Runs dsguard on the diff, then the relevant review agents in parallel, and writes one prioritized report.
 argument-hint: "[base-ref, default origin/main]"
-allowed-tools: Bash(~/.claude/ds-toolkit/bin/dsguard:*), Bash(git diff:*), Bash(git status:*), Bash(git rev-parse:*), Bash(git fetch:*), Read, Grep, Glob, Write, Agent, Task
+allowed-tools: Bash(~/.claude/ds-toolkit/bin/dsguard run:*), Bash(git diff:*), Bash(git status:*), Bash(git rev-parse:*), Read, Grep, Glob, Write, Agent, Task
 ---
 
 Run the pre-merge gate for this repository. This is a one-shot audit and report. To have a

@@ -1,7 +1,7 @@
 ---
 name: ds-start-day
 description: Start-of-day planning for whatever project you are in (any repo, any language, with or without git). Finds what is still open (yesterday's plan, TODOs, next steps in the docs, uncommitted work), asks how much time you can give the project today, builds a plan that fits that time, and splits the work into what needs you, what Claude can do in this session, and what can run unattended. Use at the start of a working session, or when the user says "start of day", "plan my day" or "what should I work on".
-allowed-tools: Bash(~/.claude/ds-toolkit/bin/dsguard:*), Bash(git status:*), Bash(git log:*), Bash(git diff:*), Bash(git -C:*), Read, Grep, Glob, Write, Edit
+allowed-tools: Bash(~/.claude/ds-toolkit/bin/dsguard day:*), Bash(~/.claude/ds-toolkit/bin/dsguard run:*), Bash(git status:*), Bash(git log:*), Bash(git diff:*), Read, Grep, Glob, Write, Edit
 ---
 
 # Start of day

@@ -77,6 +77,7 @@ accepting a dispute.
 
 ```json
 {
+  "head": "the full head commit id from the brief, copied exactly: the commit you reviewed",
   "verdict": "approve | request_changes",
   "summary": "2-4 sentences: overall quality, the main risks, what changed since last round",
   "findings": [

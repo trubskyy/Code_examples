@@ -1,7 +1,7 @@
 ---
 description: One-time adoption on a new (work) machine. Checks the install, adopts the prewritten LLM gateway, configures SQL Server tables, license reporting, model discovery and the review loop's reviewer model, and writes ~/.claude/dsguard.toml.
 argument-hint: "[path to the gateway client code, optional]"
-allowed-tools: Bash(~/.claude/ds-toolkit/bin/dsguard:*), Bash(python3:*), Bash(git:*), Bash(which:*), Bash(ls:*), Read, Grep, Glob, Edit, Write
+allowed-tools: Bash(~/.claude/ds-toolkit/bin/dsguard run:*), Bash(~/.claude/ds-toolkit/bin/dsguard suggest-gateway:*), Bash(git status:*), Bash(git config --global --get core.hooksPath), Bash(which:*), Bash(ls:*), Read, Grep, Glob, Edit, Write
 ---
 
 Set up the DS agent toolkit on this machine. Work through the steps in order, show the user
@@ -92,7 +92,8 @@ impractical in `exempt_branches`.
 
 ## 7. Commit gate for every repository
 
-Check `git config --global --get core.hooksPath`:
+Check `git config --global --get core.hooksPath` (`install.py --git-hooks` also checks system
+config and included files, and skips if any of them sets a different path):
 - **Points at `~/.claude/ds-toolkit/git-hooks/global`**: the gate already covers every repo.
 - **Unset**: offer to enable it machine-wide with `python3 ~/.claude/ds-toolkit/install.py --git-hooks`.
   Explain that each repo's own hooks (pre-commit framework, Git LFS) still run through the

@@ -1,7 +1,7 @@
 ---
 description: Author/reviewer loop before a push. A stronger reviewer model reviews the branch, this session fixes or disputes every finding, and a deterministic referee loops until done or escalates to you. Then pushes and updates the PR.
 argument-hint: "[base-ref, default origin/main] [--max-rounds N]"
-allowed-tools: Bash(~/.claude/ds-toolkit/bin/dsguard:*), Bash(git:*), Bash(gh pr:*), Read, Grep, Glob, Edit, Write, Agent, Task
+allowed-tools: Bash(~/.claude/ds-toolkit/bin/dsguard run:*), Bash(~/.claude/ds-toolkit/bin/dsguard loop start:*), Bash(~/.claude/ds-toolkit/bin/dsguard loop brief:*), Bash(~/.claude/ds-toolkit/bin/dsguard loop record-review:*), Bash(~/.claude/ds-toolkit/bin/dsguard loop record-response:*), Bash(~/.claude/ds-toolkit/bin/dsguard loop status:*), Bash(~/.claude/ds-toolkit/bin/dsguard loop report:*), Bash(git status:*), Bash(git log:*), Bash(git diff:*), Bash(git rev-parse:*), Bash(git add:*), Bash(git commit:*), Bash(gh pr view:*), Bash(gh pr list:*), Read, Grep, Glob, Edit, Write, Agent, Task
 ---
 
 Run the review loop for the current branch. You are the **author**: you wrote this code and
@@ -19,6 +19,8 @@ Arguments: `$ARGUMENTS`. Base defaults to `origin/main` (falling back to `main`,
    ~/.claude/ds-toolkit/bin/dsguard loop start --base <base> [--max-rounds N]
    ```
    This resumes an active loop on this branch if there is one. It prints the reviewer model.
+   If it says the loop is **escalated**, stop and show the user `dsguard loop report`. Run
+   `dsguard loop restart` only when the user, having seen it, asks for a restart.
 
 ## 1. Gate (every round, before the reviewer)
 
@@ -26,9 +28,10 @@ Arguments: `$ARGUMENTS`. Base defaults to `origin/main` (falling back to `main`,
 ~/.claude/ds-toolkit/bin/dsguard loop gate
 ```
 
-It runs the dsguard checks on the diff and the project's tests. If it fails, fix the failures,
+It runs the dsguard checks on the diff and the project's tests. It needs a clean tree,
+because its result counts only for the commit at HEAD. If it fails, fix the failures,
 commit, and gate again. Don't spend a review on red checks. If you can't get it green after
-two attempts, stop and report to the user: the loop escalates on a broken gate.
+two attempts, stop and report to the user.
 
 ## 2. Review (fresh reviewer, stronger model)
 
@@ -44,6 +47,10 @@ Start the `pr-reviewer` agent with the Agent tool, setting **`model`** to the br
 **Don't send** your reasoning, your plan, or arguments for why the code is right. The
 reviewer's independence is the point.
 
+Don't commit while the reviewer runs: the brief pins the commit, and a review of any other
+commit is refused. If HEAD did move, go back to step 1.
+
+Its `head` must be the brief's `head`. Never add or change that field yourself.
 Save its JSON block exactly as returned to `.dsguard/loop/review-<round>.json`, then:
 
 ```bash
@@ -90,8 +97,8 @@ Write the responses, then record them:
 ~/.claude/ds-toolkit/bin/dsguard loop record-response .dsguard/loop/response-<round>.json
 ```
 
-Push the round's commits to the PR branch (`git push -u origin <branch>`), so the PR shows each
-round. Then go back to step 1.
+Don't push yet: only an approved commit may be pushed, and the PR still shows each round
+as its own commit afterwards. Go back to step 1.
 
 ## 5. Done: push and update the PR
 

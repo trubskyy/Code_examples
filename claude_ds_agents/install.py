@@ -58,19 +58,66 @@ def update_claude_md(install: bool, dry_run: bool) -> None:
 
 
 def _git_global(*args: str) -> str | None:
-    proc = subprocess.run(["git", "config", "--global", *args], capture_output=True, text=True, check=False)
+    proc = subprocess.run(["git", "config", "--global", *args], capture_output=True, text=True, check=False,
+                          errors="surrogateescape")
     return proc.stdout.strip() if proc.returncode == 0 else None
+
+
+def _config_values(*args: str) -> list[str]:
+    """`git config` values as seen from outside any repository."""
+    proc = subprocess.run(["git", "config", "-z", *args], cwd="/", capture_output=True, text=True, check=False,
+                          errors="surrogateescape")
+    return proc.stdout.split("\0")[:-1] if proc.returncode == 0 else []  # an empty value is a value
+
+
+def _foreign_hooks_path() -> str | None:
+    """A core.hooksPath that isn't ours in system or global config, their includes, or any includeIf file.
+
+    includeIf files are read whatever their condition: those values apply inside some repos."""
+    found = _config_values("--get-all", "core.hooksPath")
+    queue, seen = [], set()
+
+    def follow(args: list[str], pattern: str) -> None:
+        # --show-origin gives origin, "key\nvalue" pairs; relative paths are relative to the origin.
+        items = _config_values(*args, "--show-origin", "--get-regexp", pattern)
+        for origin, item in zip(items[::2], items[1::2]):
+            try:
+                target = Path(item.partition("\n")[2]).expanduser()
+            except RuntimeError:  # ~user for a user who doesn't exist: git can't read it either
+                continue
+            queue.append(Path(origin.removeprefix("file:")).parent / target)
+
+    follow(["--includes"], r"^includeif\..*\.path$")
+    while queue:
+        path = queue.pop()
+        if path in seen or not path.is_file():
+            continue
+        seen.add(path)
+        found += _config_values("--file", str(path), "--get-all", "core.hooksPath")
+        follow(["--file", str(path)], r"^include(if\..*)?\.path$")
+    return next((v for v in found if not _is_ours(v)), None)
+
+
+def _is_ours(value: str) -> bool:
+    if value.startswith("~") and not value.startswith("~/"):
+        return False  # some other user's path
+    return Path(value).expanduser() in (GLOBAL_HOOKS, GLOBAL_HOOKS.resolve())
 
 
 def update_git_hooks(install: bool, dry_run: bool) -> None:
     """Point git's global core.hooksPath at the toolkit's dispatcher (opt-in), or remove it if ours."""
     current = _git_global("--get", "core.hooksPath")
-    ours = current is not None and Path(current).expanduser() in (GLOBAL_HOOKS, GLOBAL_HOOKS.resolve())
+    ours = current is not None and _is_ours(current)
     if install:
-        if ours:
+        foreign = _foreign_hooks_path()
+        if ours and foreign is not None:
+            print("unset  git config --global core.hooksPath (the toolkit's value was overriding another one)")
+            if not dry_run:
+                _git_global("--unset", "core.hooksPath")
+        if ours and foreign is None:
             print(f"ok     git core.hooksPath -> {current}")
-        elif current:
-            print(f"SKIP   git core.hooksPath is already set to {current}; not overriding it.\n"
+        elif foreign is not None:
+            print(f"SKIP   git core.hooksPath is already set to {foreign!r}; not overriding it.\n"
                   f"       Per repo instead: ln -s ~/.claude/ds-toolkit/git-hooks/pre-commit .git/hooks/pre-commit")
         else:
             print(f"set    git config --global core.hooksPath {GLOBAL_HOOKS}  (every repo; each repo's own hooks still run)")

@@ -15,6 +15,9 @@ from pathlib import Path
 USER_CONFIG = Path.home() / ".claude" / "dsguard.toml"
 STATE_DIR = ".dsguard"
 MAX_SCAN_BYTES = 2_000_000
+# What the git-hook entry points return for "blocked". Crashes, sys.exit(message) and argparse
+# exit 1 or 2, so they can't be mistaken for a finding. git-hooks/ has the same number.
+BLOCKED_EXIT = 10
 SEVERITY_ORDER = {"block": 0, "warn": 1, "info": 2}
 
 # Only used when the project is not a git repo; with git, .gitignore decides.
@@ -167,7 +170,8 @@ def match_any(rel: str, patterns: list[str]) -> bool:
 def git(root: Path, *args: str) -> str | None:
     try:
         proc = subprocess.run(
-            ["git", "-C", str(root), *args], capture_output=True, text=True, check=False
+            ["git", "-C", str(root), *args], capture_output=True, text=True, check=False,
+            errors="surrogateescape",  # file names are bytes; keep odd ones usable as paths
         )
     except FileNotFoundError:
         return None

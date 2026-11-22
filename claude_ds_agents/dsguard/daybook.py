@@ -28,11 +28,20 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import re
+import shutil
 import subprocess
+import sys
+import tempfile
 import tokenize
 from datetime import date, datetime, timedelta
 from pathlib import Path, PurePosixPath
+
+try:
+    import fcntl
+except ImportError:  # no flock on Windows; the replace below is still atomic
+    fcntl = None
 
 from .core import discover_files, git, load_config
 
@@ -70,9 +79,20 @@ def project_slug(root: Path) -> str:
     return f"{re.sub(r'[^A-Za-z0-9_.-]+', '-', root.name)}-{digest}"
 
 
+def _read_registry(path: Path) -> dict:
+    """The registry; {} if there is none yet. Raises if it exists but can't be understood."""
+    try:
+        data = json.loads(path.read_text())
+    except FileNotFoundError:
+        return {}
+    if not isinstance(data, dict):
+        raise ValueError("expected a JSON object")
+    return data
+
+
 def load_registry(cfg: dict) -> dict:
     try:
-        return json.loads((_home(cfg) / "projects.json").read_text())
+        return _read_registry(_home(cfg) / "projects.json")
     except (OSError, ValueError):
         return {}
 
@@ -80,17 +100,41 @@ def load_registry(cfg: dict) -> dict:
 def touch(root: Path, cfg: dict, today: date, **fields) -> None:
     """Record that a project was worked on (by any toolkit command), merging in extra fields.
 
+    Safe with parallel writers: a lock file is held for the read-modify-write and the file is
+    replaced atomically (only the latter where the file system has no flock). A registry that can't be read is left alone, never overwritten.
     Never raises: the registry is a convenience, and failing to write it must not break a check.
     """
     try:
-        registry = load_registry(cfg)
-        key = str(root.resolve())
-        registry[key] = registry.get(key, {"mode": None, "journal": None}) | {
-            "name": root.name, "last_seen": today.isoformat(), **fields}
-        _home(cfg).mkdir(parents=True, exist_ok=True)
-        (_home(cfg) / "projects.json").write_text(json.dumps(registry, indent=2, sort_keys=True) + "\n")
-    except OSError:
-        pass
+        home = _home(cfg)
+        home.mkdir(parents=True, exist_ok=True)
+        lock = None
+        if fcntl:
+            # writable, because NFS refuses an exclusive lock on a read-only descriptor
+            lock = os.open(home / ".projects.lock", os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            if fcntl:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX)
+                except OSError:  # no locking here; the atomic replace still prevents a wipe
+                    pass
+            path = (home / "projects.json").resolve()  # write through a symlink, don't replace it
+            registry = _read_registry(path)
+            key = str(root.resolve())
+            registry[key] = registry.get(key, {"mode": None, "journal": None}) | {
+                "name": root.name, "last_seen": today.isoformat(), **fields}
+            fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".projects-")
+            try:
+                with os.fdopen(fd, "w") as fh:
+                    fh.write(json.dumps(registry, indent=2, sort_keys=True) + "\n")
+                os.replace(tmp, path)
+            finally:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
+        finally:
+            if lock is not None:
+                os.close(lock)
+    except (OSError, ValueError, TypeError) as exc:
+        print(f"dsguard: project registry not updated ({exc})", file=sys.stderr)
 
 
 def register(root: Path, cfg: dict, journal: Path, mode: str, today: date) -> None:
@@ -121,6 +165,17 @@ def journal_commit_root(root: Path, cfg: dict, mode: str | None) -> Path | None:
     return root if mode == "repo" and _is_git(root) else None
 
 
+def _python(root: Path) -> str:
+    """The project's venv interpreter if it has pytest, else the active `python`, else `python3`.
+
+    Looks at files only: `day status` must not execute anything from the project."""
+    for venv in (".venv", "venv"):
+        has_pytest = any((root / venv).glob("lib/python*/site-packages/pytest"))
+        if has_pytest and os.access(root / venv / "bin" / "python", os.X_OK):
+            return f"{venv}/bin/python"
+    return "python" if shutil.which("python") else "python3"
+
+
 def detect_tests(root: Path, files: list[str], cfg: dict) -> str | None:
     """The project's own test command, from config or from common conventions."""
     if cfg["test_command"]:
@@ -129,7 +184,7 @@ def detect_tests(root: Path, files: list[str], cfg: dict) -> str | None:
     pyproject = (root / "pyproject.toml").read_text(errors="replace") if "pyproject.toml" in names else ""
     if ({"pytest.ini", "conftest.py", "tox.ini"} & names or "[tool.pytest" in pyproject
             or any(re.search(r"(^|/)tests?/.*\.py$|(^|/)test_[^/]*\.py$", f) for f in files)):
-        return "python -m pytest -q"
+        return f"{_python(root)} -m pytest -q"
     if "package.json" in names:
         try:
             script = json.loads((root / "package.json").read_text()).get("scripts", {}).get("test", "")
@@ -243,6 +298,11 @@ def next_step_sections(root: Path, md_files: list[str], skip: tuple = ()) -> lis
     return out
 
 
+def _git_since(since: str) -> str:
+    """git reads a bare date as that day *at the current time*; a date here means from midnight."""
+    return f"{since}T00:00:00" if DATE_RE.fullmatch(since) else since
+
+
 def changed_since(root: Path, since: str) -> list[str]:
     """Files touched by commits since a date/ref, plus uncommitted and untracked changes.
 
@@ -252,7 +312,7 @@ def changed_since(root: Path, since: str) -> list[str]:
         return sorted(f for f in discover_files(root) if (root / f).stat().st_mtime >= start)
     files: set[str] = set()
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}.*", since):
-        out = git(root, "log", f"--since={since}", "--name-only", "--pretty=format:")
+        out = git(root, "log", f"--since={_git_since(since)}", "--name-only", "--pretty=format:")
     else:
         out = git(root, "diff", "--name-only", f"{since}..HEAD")
     files.update(p for p in (out or "").splitlines() if p)
@@ -262,7 +322,7 @@ def changed_since(root: Path, since: str) -> list[str]:
 
 
 def commits_since(root: Path, since: str) -> list[dict]:
-    out = git(root, "log", f"--since={since}", "--pretty=format:%h\t%ad\t%s", "--date=format:%Y-%m-%d %H:%M") or ""
+    out = git(root, "log", f"--since={_git_since(since)}", "--pretty=format:%h\t%ad\t%s", "--date=format:%Y-%m-%d %H:%M") or ""
     return [dict(zip(("hash", "date", "subject"), line.split("\t", 2), strict=False)) for line in out.splitlines() if line]
 
 

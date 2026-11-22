@@ -1,7 +1,7 @@
 ---
 name: ds-end-day
 description: End-of-day wrap-up for whatever project you are in (any repo, any language, with or without git). Commits the day's work through the dsguard gate, runs through the Markdown files and updates them, writes today's entry in the project's story, drafts the plan for the next working day, and commits. On the weekly review day (Friday by default) it first runs a comment pass over every code file changed that week, proven not to change behavior. Use when the user says "end of day", "wrap up" or "done for today".
-allowed-tools: Bash(~/.claude/ds-toolkit/bin/dsguard:*), Bash(git status:*), Bash(git log:*), Bash(git diff:*), Bash(git add:*), Bash(git commit:*), Bash(git push:*), Bash(git -C:*), Bash(python -m pytest:*), Bash(npm test:*), Bash(make test:*), Bash(Rscript:*), Read, Grep, Glob, Write, Edit, Agent, Task
+allowed-tools: Bash(~/.claude/ds-toolkit/bin/dsguard day:*), Bash(~/.claude/ds-toolkit/bin/dsguard run:*), Bash(~/.claude/ds-toolkit/bin/dsguard verify-docs-only:*), Bash(git status:*), Bash(git log:*), Bash(git diff:*), Bash(git add:*), Bash(git commit:*), Read, Grep, Glob, Write, Edit, Agent, Task
 ---
 
 # End of day
@@ -68,7 +68,7 @@ If verify fails, revert the offending hunks and re-run until it passes. Commit a
 ## 4. Run through the Markdown files
 
 Bring the docs in line with what actually changed. Base every edit on the diff
-(`git diff <first commit today>~1..HEAD` or `git log --since=<date> -p`), not on memory.
+(`git diff <first commit today>~1..HEAD` or `git log --since=<date>T00:00:00 -p`), not on memory.
 - Every file in `md_check_today.mentions_changed_files` (and, on review day, the docs that
   mention files changed this week): check each statement about the changed code is still true.
   That covers flags, file names, steps, counts and status.

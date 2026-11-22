@@ -6,9 +6,12 @@ answers with a permission decision:
   deny  - new content imports a provider SDK / hits a provider endpoint (ban mode),
           or contains a high-confidence secret; a Bash command calls a provider endpoint
   ask   - a recursive rm (so the cleanup agent goes through dsguard apply-cleanup)
-Anything else, including an internal error, passes silently: a broken hook must
-not stop work, and CI/pre-commit run the same rules as the backstop.
+Anything else passes silently. An internal error (broken config, failed import) also
+passes, because a broken hook must not stop work, but it tells the user that nothing
+is being checked.
 """
+
+from __future__ import annotations  # so an older python3 still gets as far as the warning
 
 import json
 import re
@@ -17,13 +20,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from dsguard import gateway, secrets  # noqa: E402
-from dsguard.core import find_root, load_config, match_any, parse  # noqa: E402
-
 RECURSIVE_RM = re.compile(r"(^|[;&|]\s*|\s)(sudo\s+)?rm\s+(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)\b")
 
 
 def decide(payload: dict) -> tuple[str, str] | None:
+    # Imported here so that main() can report a toolkit that doesn't even load.
+    from dsguard import gateway, secrets
+    from dsguard.core import find_root, load_config, match_any, parse
+
     tool = payload.get("tool_name", "")
     data = payload.get("tool_input", {}) or {}
     root = find_root(Path(payload.get("cwd") or "."))
@@ -76,8 +80,13 @@ def decide(payload: dict) -> tuple[str, str] | None:
 def main() -> int:
     try:
         decision = decide(json.load(sys.stdin))
-    except Exception as exc:  # fail open; pre-commit and CI re-check
-        print(f"dsguard hook error (allowed): {exc}", file=sys.stderr)
+    except Exception as exc:  # fail open, but say so: systemMessage is shown to the user
+        error = f"{type(exc).__name__}: {exc}"
+        print(json.dumps({"systemMessage": (
+            f"dsguard is NOT checking edits or commands ({error}). Everything is being allowed. "
+            "Check ~/.claude/dsguard.toml and the project's dsguard.toml."
+        )}))
+        print(f"dsguard hook error (allowed): {error}", file=sys.stderr)
         return 0
     if decision:
         verdict, reason = decision

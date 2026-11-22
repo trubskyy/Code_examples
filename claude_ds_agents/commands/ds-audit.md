@@ -1,7 +1,7 @@
 ---
 description: Full project audit with every reviewer agent. Use when inheriting a project, before a handover, or periodically.
 argument-hint: "[path to limit the audit, optional]"
-allowed-tools: Bash(~/.claude/ds-toolkit/bin/dsguard:*), Bash(git status:*), Bash(git ls-files:*), Read, Grep, Glob, Write, Agent, Task
+allowed-tools: Bash(~/.claude/ds-toolkit/bin/dsguard run:*), Bash(git status:*), Bash(git ls-files:*), Read, Grep, Glob, Write, Agent, Task
 ---
 
 Audit this whole repository (or only `$ARGUMENTS` if a path is given).

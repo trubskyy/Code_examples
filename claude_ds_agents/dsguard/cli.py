@@ -9,7 +9,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from . import cleanup, code, daybook, docs, reviewloop, exposure, gateway, leakage, licenses, onboard, pysec, secrets, sql, vulns
-from .core import SEVERITY_ORDER, CheckResult, build_context, ensure_state_dir, find_root
+from .core import BLOCKED_EXIT, SEVERITY_ORDER, CheckResult, build_context, ensure_state_dir, find_root
 
 CHECKS = {
     "gateway": gateway.run, "secrets": secrets.run, "exposure": exposure.run, "pysec": pysec.run,
@@ -85,18 +85,25 @@ def cmd_run(args) -> int:
     saved = None if args.no_save else _save(root, payload)
     counts = {s: sum(f.severity == s for r in results for f in r.findings) for s in SEVERITY_ORDER}
     verdict = "BLOCKED" if counts["block"] else "WARNINGS" if counts["warn"] else "OK"
-    journal, mode = daybook.resolve_journal(root, ctx.config["daybook"])
-    known = {"mode": mode, "journal": str(journal)} if journal else {}
-    daybook.touch(root, ctx.config["daybook"], date.today(), **known,
-                  dsguard={"date": date.today().isoformat(), "verdict": verdict, "checks": ",".join(r.name for r in results),
-                           "scope": payload["scope"], **counts})
+    try:
+        journal, mode = daybook.resolve_journal(root, ctx.config["daybook"])
+        known = {"mode": mode, "journal": str(journal)} if journal else {}
+        daybook.touch(root, ctx.config["daybook"], date.today(), **known,
+                      dsguard={"date": date.today().isoformat(), "verdict": verdict, "checks": ",".join(r.name for r in results),
+                               "scope": payload["scope"], **counts})
+    except Exception as exc:  # bookkeeping must not change the verdict
+        print(f"dsguard: project registry not updated ({type(exc).__name__}: {exc})", file=sys.stderr)
     if args.format == "json":
         print(json.dumps(payload, indent=2))
     else:
         print(render_text(results, args.limit))
         if saved:
             print(f"\nfull report: {saved}")
-    return 1 if blocked else 0
+    if blocked:
+        return BLOCKED_EXIT if args.hook else 1
+    if args.hook and any(r.status == "error" for r in results):
+        return 3  # not BLOCKED_EXIT: the hooks allow it and warn that it went unchecked
+    return 0
 
 
 def cmd_verify_docs(args) -> int:
@@ -107,6 +114,9 @@ def cmd_verify_docs(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="backslashreplace")  # printing an odd file name must not crash a gate
     parser = argparse.ArgumentParser(prog="dsguard", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -120,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--format", choices=["text", "json"], default="text")
     run.add_argument("--limit", type=int, default=40, help="max findings per check in text output")
     run.add_argument("--no-save", action="store_true", help="do not write .dsguard/reports")
+    run.add_argument("--hook", action="store_true", help=f"exit {BLOCKED_EXIT} (not 1) when blocked, for git hooks")
     run.set_defaults(func=cmd_run)
 
     verify = sub.add_parser("verify-docs-only", help="fail if edits since REF changed code, not just docs")
@@ -148,12 +159,12 @@ def main(argv: list[str] | None = None) -> int:
 
     loop = sub.add_parser("loop", help="review loop referee: author model <-> stronger reviewer model")
     loop.add_argument("action", choices=["start", "gate", "brief", "record-review", "record-response",
-                                         "status", "report", "check-push"])
+                                         "status", "report", "check-push", "restart"])
     loop.add_argument("file", nargs="?", help="JSON file for record-review / record-response")
     loop.add_argument("--root", default=".")
     loop.add_argument("--base", help="start: the PR's base ref (default origin/main)")
     loop.add_argument("--max-rounds", type=int)
-    loop.add_argument("--restart", action="store_true", help="start: archive the current loop and begin again")
+    loop.add_argument("--refs-stdin", action="store_true", help="check-push: judge the refs git gives pre-push on stdin")
     loop.set_defaults(func=reviewloop.main)
 
     apply = sub.add_parser("apply-cleanup", help="execute an approved cleanup plan (reversible)")

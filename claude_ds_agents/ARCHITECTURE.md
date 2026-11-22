@@ -134,12 +134,12 @@ The same picture as text:
 | Component | Trigger | Decision |
 |---|---|---|
 | `hooks/pretooluse_guard.py` | Claude Code `PreToolUse` on `Write\|Edit\|MultiEdit\|NotebookEdit\|Bash` | **deny**: new content imports a provider SDK, references a provider host, or contains a high-confidence secret; a Bash command calls a provider host. **ask**: recursive `rm`. Otherwise silent. |
-| `git-hooks/global/` (opt-in, `install.py --git-hooks`) | any git hook in **any repo**, via global `core.hooksPath` | `_dispatch`: on pre-commit, `dsguard run commit --staged` (a block fails the commit; a missing or broken toolkit doesn't); on pre-push, `dsguard loop check-push` (blocks unapproved commits only when `enforce_on_push` is on); then it **always runs the repo's own `.git/hooks/<name>`**, so pre-commit framework, Git LFS and custom hooks keep working. Opt-outs: `git config ds.guard false`, `DSGUARD_SKIP=1`. Never installed over an existing global `core.hooksPath`. |
+| `git-hooks/global/` (opt-in, `install.py --git-hooks`) | any git hook in **any repo**, via global `core.hooksPath` | `_dispatch`: on pre-commit, `dsguard run commit --staged` (only exit code 10, a real block, fails the commit; a missing or broken toolkit warns); on pre-push, `dsguard loop check-push --refs-stdin` (judges every ref being pushed; blocks only when `enforce_on_push` is on); then it **always runs the repo's own `.git/hooks/<name>`**, so pre-commit framework, Git LFS and custom hooks keep working. Opt-outs: `git config ds.guard false`, `DSGUARD_SKIP=1`. Server hooks are forwarded too; without a repo hook, `push-to-checkout` reproduces git's default and `proc-receive` fails. Never installed over a `core.hooksPath` from system or global config or their includes. |
 | `git-hooks/pre-commit` | `git commit` in a repo it's linked into | Same gate, per repo, for machines where the global setting is taken |
 | `claude/CLAUDE-block.md` | every Claude Code session | Installed as a marked block in `~/.claude/CLAUDE.md`: tells Claude in any project that the toolkit exists, which agent fits which job, to gate commits, and to read the project's story |
 
-The hook **fails open**: an internal error lets the edit through, with a message on stderr. A
-broken hook must not stop work. The pre-commit hook and `/ds-premerge` run the same rules as
+The hook **fails open**: an internal error lets the edit through, and shows you a warning
+(`systemMessage`) that nothing is being checked. A broken hook must not stop work. The pre-commit hook and `/ds-premerge` run the same rules as
 the backstop. Both use the same functions as the full checks
 (`gateway.scan_python_tree`, `secrets.scan_text`), so the rules can't diverge.
 
@@ -180,7 +180,7 @@ Finding     { rule, severity: block|warn|info, path, message, line?, cell? }
 
 | Severity | Meaning | Who may override |
 |---|---|---|
-| `block` | Policy violation or leak; exit code 1 | Nobody in-session. Fix it, or change config deliberately. |
+| `block` | Policy violation or leak; exit code 1 (10 with `--hook`, for git hooks) | Nobody in-session. Fix it, or change config deliberately. |
 | `warn` | Likely problem | Agent judgement, with a reason |
 | `info` | Context or a lead | Agent judgement |
 
@@ -245,7 +245,7 @@ same template: **run the script → judgement checklist → standard report**.
 |---|---|
 | `/ds-premerge [base]` | `dsguard run all --changed-since base` → choose reviewers from the diff (security always; code if .py/.ipynb changed; sql if SQL; leakage if training code; llm-evaluator only against an existing baseline) → run them in parallel → merge into `.dsguard/reports/premerge-*.md`. Verdict: any block = BLOCKED, any high = FIX BEFORE MERGE, else READY. |
 | `/ds-audit [path]` | `dsguard run all` → all read-only reviewers + leakage + cleanup (plan only) in parallel → `audit-*.md` with suggested next agents |
-| `/ds-review-loop [base]` | `dsguard loop start` → per round: `loop gate` (dsguard + tests) → `pr-reviewer` subagent on the reviewer model (`fable` by default) with only `loop brief` → `loop record-review` (validates, tracks findings, decides) → CONTINUE: the author fixes or disputes each blocking finding and runs `loop record-response`, then pushes the round → DONE: push, open or update the PR, post `loop report` → ESCALATE: stop and hand the decision to the user |
+| `/ds-review-loop [base]` | `dsguard loop start` → per round: `loop gate` (dsguard + tests) → `pr-reviewer` subagent on the reviewer model (`fable` by default) with only `loop brief` → `loop record-review` (validates, tracks findings, decides) → CONTINUE: the author fixes or disputes each blocking finding and runs `loop record-response` (no push yet) → DONE: push, open or update the PR, post `loop report` → ESCALATE: stop and hand the decision to the user |
 | `/ds-setup [gateway path]` | install check → `suggest-gateway` → validate on a real project and hook dry run → SQL Server tables via read-only `sys.*` queries → license split → model scan → per-repo pre-commit |
 | `/ds-start-day` (skill, any project) | `dsguard day status` (outside a project: the cross-project list → pick one; first time in a project: choose repo or private journal) → show what's left → **ask available time** → plan to fit (20 % buffer, review time counted) in three buckets: needs you / Claude in session / unattended → `docs/journal/plans/<today>.md` → offer to start the non-you work |
 | `/ds-end-day` (skill, any project) | `dsguard day status` → commit remaining work (one confirmation, `dsguard run commit --staged`) → **if Friday**: documenter comment pass on `week-files` → `verify-docs-only` → commit → `mark-review` → update Markdown files from the diff and fix broken links → tick plan, append story entry → draft next-workday plan → commit the journal to the project (repo mode) or to `~/.claude/journal` (home mode); push only if configured |
@@ -325,7 +325,7 @@ sequenceDiagram
     participant R as pr-reviewer (stronger model, fresh context)
     A->>G: start --base main
     loop until DONE or ESCALATE
-        A->>G: gate (dsguard + tests must be green)
+        A->>G: gate (clean tree, dsguard + tests green)
         A->>G: brief
         G-->>A: diff range, prior findings, author responses
         A->>R: brief only (no author reasoning)
@@ -344,12 +344,16 @@ Referee rules, all deterministic:
 - The author must answer every blocking finding.
 - Findings are matched across rounds by id, or by a fingerprint (category, file and title
   words, ignoring line numbers).
+- A brief and an approval both need a green gate on that exact commit; a review is refused if
+  HEAD moved since the brief.
+- Deferred findings stay deferred, and an escalated loop is only replaced by `loop restart`.
 - **DONE** means no blocking finding is open and the reviewer approves.
 - **ESCALATE** on any of: the round limit, no progress, a finding reopened twice, a dispute
   rejected twice, the blocking count rising two rounds running, or deferred items.
 
 State lives in `.dsguard/loop/<branch>.json`. With `enforce_on_push`, the pre-push dispatcher
-calls `dsguard loop check-push`, which allows only the commit the loop approved.
+calls `dsguard loop check-push --refs-stdin`, which allows a branch only at the commit the loop
+approved. Deletions are allowed, and tags only on approved or already published commits.
 
 **Reversible cleanup**
 
@@ -420,7 +424,7 @@ dsguard/core.py DEFAULTS  <  ~/.claude/dsguard.toml  <  [tool.dsguard] in pyproj
 | A reviewer that rubber-stamps, or an author that games the reviewer | The reviewer runs in a fresh context on a stronger model and sees only the code and the replies; a script, not either model, decides DONE; ping-pong, stalemates and repeated disputes escalate to a person; merging stays a human decision |
 | Documentation edits change behavior | `verify-docs-only` compares docstring-free ASTs |
 | A missing tool looks like a pass | `skipped` status and "Not covered" sections |
-| A broken hook blocks work | Fails open; pre-commit and pre-merge run the same rules |
+| A broken hook blocks work | Fails open with a visible warning that nothing is being checked |
 
 ## 9. Testing
 

@@ -47,6 +47,14 @@ def review(verdict, findings=(), resolved=(), disputes=()):
             "resolved_prior": list(resolved), "disputes": list(disputes)}
 
 
+def reviewed(root, data):
+    """One reviewer round as the command runs it: gate, brief, record."""
+    if rl.load_state(root)["status"] == "active":
+        rl.gate(root)
+        data = {"head": rl.review_brief(root)["head"]} | data
+    return rl.record_review(root, data)
+
+
 def commit(root, text):
     (root / "app.py").write_text(text)
     git(root, "commit", "-qam", "fix")
@@ -54,13 +62,13 @@ def commit(root, text):
 
 def test_converges_to_done_and_approves_head(repo):
     rl.start(repo, "main")
-    d1 = rl.record_review(repo, review("request_changes", [finding("None input crashes f")]))
+    d1 = reviewed(repo, review("request_changes", [finding("None input crashes f")]))
     assert d1["action"] == "CONTINUE" and d1["blocking_open"] == ["R1-1"]
     with pytest.raises(SystemExit, match="author has not answered"):
-        rl.record_review(repo, review("approve"))
+        reviewed(repo, review("approve"))
     commit(repo, "def f(x):\n    return 0 if x is None else x * 2\n")
     rl.record_response(repo, [{"id": "R1-1", "action": "fixed", "note": "guard"}])
-    d2 = rl.record_review(repo, review("approve", resolved=["R1-1"]))
+    d2 = reviewed(repo, review("approve", resolved=["R1-1"]))
     assert d2["action"] == "DONE"
     state = rl.load_state(repo)
     assert state["status"] == "done" and state["approved_head"] == rl._head(repo)
@@ -69,30 +77,30 @@ def test_converges_to_done_and_approves_head(repo):
 
 def test_minor_findings_do_not_block(repo):
     rl.start(repo, "main")
-    d = rl.record_review(repo, review("approve", [finding("Rename x to value", severity="nit")]))
+    d = reviewed(repo, review("approve", [finding("Rename x to value", severity="nit")]))
     assert d["action"] == "DONE"
 
 
 def test_review_validation(repo):
     rl.start(repo, "main")
     with pytest.raises(SystemExit, match="verdict"):
-        rl.record_review(repo, {"verdict": "lgtm", "findings": []})
+        reviewed(repo, {"verdict": "lgtm", "findings": []})
     no_scenario = finding("x")
     del no_scenario["failure_scenario"]
     with pytest.raises(SystemExit, match="failure_scenario"):
-        rl.record_review(repo, review("request_changes", [no_scenario]))
+        reviewed(repo, review("request_changes", [no_scenario]))
     with pytest.raises(SystemExit, match="missing evidence"):
-        rl.record_review(repo, review("request_changes", [finding("x") | {"evidence": ""}]))
+        reviewed(repo, review("request_changes", [finding("x") | {"evidence": ""}]))
 
 
 def test_reviewer_must_account_for_every_open_finding_and_dispute(repo):
     rl.start(repo, "main")
-    rl.record_review(repo, review("request_changes", [finding("None input crashes f"), finding("Overflow on big ints")]))
+    reviewed(repo, review("request_changes", [finding("None input crashes f"), finding("Overflow on big ints")]))
     rl.record_response(repo, [{"id": "R1-1", "action": "fixed"},
                               {"id": "R1-2", "action": "disputed", "reason": "Python ints do not overflow"}])
     with pytest.raises(SystemExit, match="missing: R1-2"):
-        rl.record_review(repo, review("approve", resolved=["R1-1"]))
-    d = rl.record_review(repo, review("approve", resolved=["R1-1"],
+        reviewed(repo, review("approve", resolved=["R1-1"]))
+    d = reviewed(repo, review("approve", resolved=["R1-1"],
                                       disputes=[{"prior_id": "R1-2", "ruling": "accept_dispute", "reason": "right"}]))
     assert d["action"] == "DONE"
     assert rl.load_state(repo)["findings"]["R1-2"]["status"] == "dismissed"
@@ -100,7 +108,7 @@ def test_reviewer_must_account_for_every_open_finding_and_dispute(repo):
 
 def test_author_must_answer_every_blocking_finding(repo):
     rl.start(repo, "main")
-    rl.record_review(repo, review("request_changes", [finding("A broken"), finding("B broken thing")]))
+    reviewed(repo, review("request_changes", [finding("A broken"), finding("B broken thing")]))
     with pytest.raises(SystemExit, match="missing: R1-2"):
         rl.record_response(repo, [{"id": "R1-1", "action": "fixed"}])
     with pytest.raises(SystemExit, match="needs a reason"):
@@ -109,23 +117,23 @@ def test_author_must_answer_every_blocking_finding(repo):
 
 def test_no_progress_escalates(repo):
     rl.start(repo, "main")
-    rl.record_review(repo, review("request_changes", [finding("None input crashes f")]))
+    reviewed(repo, review("request_changes", [finding("None input crashes f")]))
     rl.record_response(repo, [{"id": "R1-1", "action": "fixed"}])
     # Reviewer re-reports the same problem without linking it: the fingerprint still matches.
-    d = rl.record_review(repo, review("request_changes", [finding("f crashes on None input", line=7)]))
+    d = reviewed(repo, review("request_changes", [finding("f crashes on None input", line=7)]))
     assert d["action"] == "ESCALATE" and "no progress" in d["reason"]
     with pytest.raises(SystemExit, match="escalated"):
-        rl.record_review(repo, review("approve"))
+        reviewed(repo, review("approve"))
 
 
 def test_ping_pong_and_rejected_disputes_escalate(repo):
     rl.start(repo, "main", max_rounds=10)
-    rl.record_review(repo, review("request_changes", [finding("None input crashes f"), finding("Another bug here")]))
+    reviewed(repo, review("request_changes", [finding("None input crashes f"), finding("Another bug here")]))
     for _ in range(2):  # fixed, then reported again: reopened twice
         rl.record_response(repo, [{"id": "R1-1", "action": "fixed"}, {"id": "R1-2", "action": "fixed"}])
-        d = rl.record_review(repo, review("request_changes", resolved=["R1-1", "R1-2"]))
+        d = reviewed(repo, review("request_changes", resolved=["R1-1", "R1-2"]))
         rl.record_response(repo, [])
-        d = rl.record_review(repo, review("request_changes", [finding("x", prior_id="R1-1")]))
+        d = reviewed(repo, review("request_changes", [finding("x", prior_id="R1-1")]))
         if d["action"] == "ESCALATE":
             break
     assert d["action"] == "ESCALATE" and "ping-pong" in d["reason"]
@@ -133,28 +141,28 @@ def test_ping_pong_and_rejected_disputes_escalate(repo):
 
 def test_dispute_rejected_twice_escalates(repo):
     rl.start(repo, "main", max_rounds=10)
-    rl.record_review(repo, review("request_changes", [finding("None input crashes f"), finding("Second issue")]))
+    reviewed(repo, review("request_changes", [finding("None input crashes f"), finding("Second issue")]))
     reject = [{"prior_id": "R1-1", "ruling": "reject_dispute", "reason": "callers pass None"}]
     rl.record_response(repo, [{"id": "R1-1", "action": "disputed", "reason": "never None"},
                               {"id": "R1-2", "action": "fixed"}])
-    d = rl.record_review(repo, review("request_changes", [finding("None input crashes f", prior_id="R1-1")],
+    d = reviewed(repo, review("request_changes", [finding("None input crashes f", prior_id="R1-1")],
                                       resolved=["R1-2"], disputes=reject))
     assert d["action"] == "CONTINUE"
     rl.record_response(repo, [{"id": "R1-1", "action": "disputed", "reason": "still never None"}])
-    d = rl.record_review(repo, review("request_changes", [finding("None input crashes f", prior_id="R1-1")],
+    d = reviewed(repo, review("request_changes", [finding("None input crashes f", prior_id="R1-1")],
                                       disputes=reject))
     assert d["action"] == "ESCALATE" and "disagree" in d["reason"]
 
 
 def test_round_limit_and_deferred_escalate(repo):
     rl.start(repo, "main", max_rounds=1)
-    d = rl.record_review(repo, review("request_changes", [finding("None input crashes f")]))
+    d = reviewed(repo, review("request_changes", [finding("None input crashes f")]))
     assert d["action"] == "ESCALATE" and "round limit" in d["reason"]
 
-    rl.main(type("A", (), {"root": str(repo), "action": "start", "base": "main", "max_rounds": 3, "restart": True})())
-    rl.record_review(repo, review("request_changes", [finding("Needs product decision on rounding")]))
+    rl.main(type("A", (), {"root": str(repo), "action": "restart", "base": "main", "max_rounds": 3})())
+    reviewed(repo, review("request_changes", [finding("Needs product decision on rounding")]))
     rl.record_response(repo, [{"id": "R1-1", "action": "deferred", "reason": "PM decides rounding"}])
-    d = rl.record_review(repo, review("approve"))
+    d = reviewed(repo, review("approve"))
     assert d["action"] == "ESCALATE" and "deferred" in d["reason"]
 
 
@@ -175,6 +183,7 @@ def test_gate_runs_tests_and_dsguard(repo):
 def _enforce(repo):
     cfg = (repo / "dsguard.toml").read_text()
     (repo / "dsguard.toml").write_text(cfg.replace('test_command = "true"', 'test_command = "true"\nenforce_on_push = true'))
+    git(repo, "commit", "-qam", "enforce")          # the gate needs a clean tree
 
 
 def test_check_push_enforcement(repo):
@@ -183,7 +192,7 @@ def test_check_push_enforcement(repo):
     ok, why = rl.check_push(repo)
     assert not ok and "not been through" in why
     rl.start(repo, "main")
-    rl.record_review(repo, review("approve"))
+    reviewed(repo, review("approve"))
     assert rl.check_push(repo)[0]
     commit(repo, "def f(x):\n    return x * 3\n")
     ok, why = rl.check_push(repo)
@@ -201,15 +210,16 @@ def test_pre_push_hook_blocks_unapproved_commits(repo, tmp_path):
     blocked = subprocess.run(["git", "-C", str(repo), "push", "-q", "origin", "feature"], capture_output=True, text=True, env=env)
     assert blocked.returncode != 0 and "push blocked" in blocked.stderr
     rl.start(repo, "main")
-    rl.record_review(repo, review("approve"))
+    reviewed(repo, review("approve"))
     allowed = subprocess.run(["git", "-C", str(repo), "push", "-q", "origin", "feature"], capture_output=True, text=True, env=env)
     assert allowed.returncode == 0, allowed.stderr
 
 
 def test_brief_carries_prior_findings_and_responses(repo):
     rl.start(repo, "main")
-    rl.record_review(repo, review("request_changes", [finding("None input crashes f")]))
+    reviewed(repo, review("request_changes", [finding("None input crashes f")]))
     rl.record_response(repo, [{"id": "R1-1", "action": "disputed", "reason": "validated upstream"}])
+    rl.gate(repo)
     brief = rl.review_brief(repo)
     assert brief["round"] == 2 and brief["reviewer_model"] == "fable"
     assert "R1-1" in brief["prior_findings"] and brief["author_responses"][0]["action"] == "disputed"
